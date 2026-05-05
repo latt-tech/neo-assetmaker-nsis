@@ -22,7 +22,9 @@ def StartDrmApp(ssh):
     # 为  什  么  白  银  要  把  启  动  外  部  程  序  的  功  能  塞  在  s  h  e  l  l  里  🤬  🤬
     UploadFile(
         ssh,
-        os.path.join(os.getcwd(), "core", "scripts", "hostStartDrm.sh"),
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "scripts", "hostStartDrm.sh"
+        ),
         "/root/hostStartDrm.sh",
     )
     stdin, stdout, stderr = ssh.exec_command("chmod +x /root/hostStartDrm.sh")
@@ -79,9 +81,8 @@ def RefreshRemoteMaterialListCache(ssh):
             # 下载预览图
             targetPath = os.path.dirname(targetJsonFile) + "/"
             iconPath = GetIconPath(os.path.join(currentPath, baseJsonFileName))
-            if iconPath is None:
-                continue
-            scp.get(targetPath + iconPath, os.path.join(currentPath, iconPath))
+            if not (iconPath is None):
+                scp.get(targetPath + iconPath, os.path.join(currentPath, iconPath))
 
             # 保存远程文件路径
             with open(

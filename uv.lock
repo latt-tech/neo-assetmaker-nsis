@@ -809,6 +809,7 @@ version = "2.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
+    { name = "cx-freeze" },
     { name = "fido2" },
     { name = "httpx" },
     { name = "jsonschema" },
@@ -836,6 +837,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=12.0.0" },
+    { name = "cx-freeze", specifier = ">=7.2.10" },
     { name = "fido2", specifier = ">=2.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.17.0" },

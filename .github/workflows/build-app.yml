@@ -2,6 +2,10 @@ name: Build Application
 
 on:
   workflow_call:
+    outputs:
+      artifact_run_id:
+        description: 'Workflow run ID that uploaded the build artifact'
+        value: ${{ jobs.build.outputs.artifact_run_id }}
     inputs:
       skip_flasher:
         type: boolean
@@ -20,6 +24,8 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 90
+    outputs:
+      artifact_run_id: ${{ steps.expose-run-id.outputs.artifact_run_id }}
 
     steps:
       - name: Checkout code
@@ -161,9 +167,32 @@ jobs:
           # qfluentwidgets 等第三方库触发的 SyntaxWarning
           PYTHONWARNINGS: "ignore::SyntaxWarning"
 
+      - name: Debug exe outputs
+        shell: pwsh
+        run: |
+          Write-Host "==== dist contents ===="
+          if (Test-Path "dist") {
+            Get-ChildItem -Recurse "dist" | Select-Object FullName, Length
+          } else {
+            Write-Host "dist directory not found"
+          }
+          Write-Host "==== cx_Freeze contents ===="
+          if (Test-Path "ArknightsPassMaker") {
+            Get-ChildItem -Recurse "ArknightsPassMaker" -Filter *.exe | Select-Object FullName, Length
+          } else {
+            Write-Host "ArknightsPassMaker directory not found"
+          }
+      
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ArknightsPassMaker-Build
           path: |
             dist/*.exe
+          if-no-files-found: error
+
+      - name: Expose artifact run ID
+        id: expose-run-id
+        shell: pwsh
+        run: |
+          "artifact_run_id=${{ github.run_id }}" >> $env:GITHUB_OUTPUT

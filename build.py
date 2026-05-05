@@ -1,12 +1,14 @@
 """
 明日方舟通行证素材工具箱 - cx_Freeze + Inno Setup 打包工具
 """
+
 import os
 import sys
 import subprocess
 import argparse
 import shutil
 import urllib.request
+
 sys.setrecursionlimit(10000)
 
 PROJECT_NAME = "ArknightsPassMaker"
@@ -23,7 +25,9 @@ def get_version() -> str:
         import tomllib
     except ImportError:
         import tomli as tomllib
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml"), "rb") as f:
+    with open(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml"), "rb"
+    ) as f:
         return tomllib.load(f)["project"]["version"]
 
 
@@ -36,9 +40,15 @@ INNO_SETUP_DIR = "tools/innosetup"
 
 def parse_args():
     parser = argparse.ArgumentParser(description=f"{PROJECT_NAME} Build Tool")
-    parser.add_argument('--no-installer', action='store_true', help='Skip installer packaging')
-    parser.add_argument('--clean', action='store_true', help='Clean build directories')
-    parser.add_argument('--skip-flasher', action='store_true', help='Skip epass_flasher/bin check (not recommended)')
+    parser.add_argument(
+        "--no-installer", action="store_true", help="Skip installer packaging"
+    )
+    parser.add_argument("--clean", action="store_true", help="Clean build directories")
+    parser.add_argument(
+        "--skip-flasher",
+        action="store_true",
+        help="Skip epass_flasher/bin check (not recommended)",
+    )
     return parser.parse_args()
 
 
@@ -48,7 +58,8 @@ def get_site_packages():
     参考: https://docs.python.org/3/library/sysconfig.html#sysconfig.get_path
     """
     import sysconfig
-    return sysconfig.get_path('purelib')
+
+    return sysconfig.get_path("purelib")
 
 
 def download_inno_setup():
@@ -60,16 +71,23 @@ def download_inno_setup():
     print("Downloading Inno Setup...")
     os.makedirs(INNO_SETUP_DIR, exist_ok=True)
 
-    url = "https://files.jrsoftware.org/is/6/innosetup-6.4.3.exe"
+    url = "https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe"
     installer_path = os.path.join(INNO_SETUP_DIR, "innosetup.exe")
 
     try:
         urllib.request.urlretrieve(url, installer_path)
         print("Installing Inno Setup (silent)...")
-        subprocess.run([
-            installer_path, "/VERYSILENT", "/SUPPRESSMSGBOXES",
-            "/NORESTART", f"/DIR={os.path.abspath(INNO_SETUP_DIR)}"
-        ], check=True, capture_output=True)
+        subprocess.run(
+            [
+                installer_path,
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                f"/DIR={os.path.abspath(INNO_SETUP_DIR)}",
+            ],
+            check=True,
+            capture_output=True,
+        )
         os.remove(installer_path)
 
         if os.path.exists(iscc_path):
@@ -97,21 +115,27 @@ def find_inno_setup():
     return None
 
 
-
-
-def _clean_pycache(base_dir='.'):
+def _clean_pycache(base_dir="."):
     """清理项目源码的 __pycache__ 目录
 
     跳过 .venv/ 等无关目录（避免删除第三方包字节码）
     """
-    skip_dirs = {'.venv', 'venv', '.git', 'simulator', 'node_modules', BUILD_DIR, DIST_DIR}
+    skip_dirs = {
+        ".venv",
+        "venv",
+        ".git",
+        "simulator",
+        "node_modules",
+        BUILD_DIR,
+        DIST_DIR,
+    }
     for root, dirs, files in os.walk(base_dir):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
-        if '__pycache__' in dirs:
-            cache_path = os.path.join(root, '__pycache__')
+        if "__pycache__" in dirs:
+            cache_path = os.path.join(root, "__pycache__")
             shutil.rmtree(cache_path)
             print(f"  Cleared: {cache_path}")
-            dirs.remove('__pycache__')
+            dirs.remove("__pycache__")
 
 
 def _diagnose_build_env():
@@ -196,8 +220,10 @@ def _verify_modules(search_paths, project_root):
         if parent and parent not in search_paths:
             search_paths.insert(1, parent)
             print(f"  Fallback: added {parent} for {pkg_name}")
-        print(f"  WARNING: PathFinder cannot find {pkg_name}, "
-              f"but importlib.util found it at {util_spec.origin}")
+        print(
+            f"  WARNING: PathFinder cannot find {pkg_name}, "
+            f"but importlib.util found it at {util_spec.origin}"
+        )
 
     if missing:
         print(f"\n  Cannot proceed without: {', '.join(missing)}")
@@ -213,6 +239,7 @@ def check_requirements():
 
     try:
         import cx_Freeze
+
         print(f"  cx_Freeze: {cx_Freeze.__version__}")
     except ImportError:
         print("Error: cx_Freeze not installed")
@@ -262,8 +289,9 @@ def run_cxfreeze(skip_flasher=False):
     # cx_Freeze 只使用 PathFinder（finder.py:382-383），不使用 sys.meta_path。
     # 必须显式包含 site-packages，否则 uv/conda 等环境中第三方包可能找不到。
     import sysconfig as _sc
+
     search_paths = [project_root] + list(sys.path)
-    for extra in [_sc.get_path('purelib'), _sc.get_path('platlib')]:
+    for extra in [_sc.get_path("purelib"), _sc.get_path("platlib")]:
         if extra and os.path.isdir(extra) and extra not in search_paths:
             search_paths.insert(1, extra)
             print(f"  Added site-packages to search path: {extra}")
@@ -293,8 +321,12 @@ def run_cxfreeze(skip_flasher=False):
     site_packages = get_site_packages()
 
     packages = [
-        "PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets",
-        "PyQt6.QtOpenGLWidgets", "PyQt6.QtOpenGL",
+        "PyQt6",
+        "PyQt6.QtCore",
+        "PyQt6.QtGui",
+        "PyQt6.QtWidgets",
+        "PyQt6.QtOpenGLWidgets",
+        "PyQt6.QtOpenGL",
         "qfluentwidgets",
         # av (PyAV) 不放在 packages 中 — cx_Freeze 7.2.10 的 PathFinder.find_spec
         # 无法定位 PyAV 17+ 的 abi3 C 扩展包（finder.py:383 返回 None）。
@@ -303,14 +335,31 @@ def run_cxfreeze(skip_flasher=False):
         # _import_all_sub_modules() 递归扫描整个 OpenGL/ 目录(2800+ 文件),
         # 任何子模块加载失败都会导致 ImportError 中止构建。
         # 改为在 includes 中精确指定入口点和动态加载的模块。
-        "cv2", "PIL", "numpy", "jsonschema", "thefuzz",
-        "logging", "json", "uuid", "dataclasses",
-        "httpx", "httpcore", "httpx._transports",
-        "keyring", "keyring.backends",
+        "cv2",
+        "PIL",
+        "numpy",
+        "jsonschema",
+        "thefuzz",
+        "logging",
+        "json",
+        "uuid",
+        "dataclasses",
+        "httpx",
+        "httpcore",
+        "httpx._transports",
+        "keyring",
+        "keyring.backends",
         "platformdirs",
-        "fido2", "fido2.hid", "fido2.client", "fido2.webauthn",
+        "fido2",
+        "fido2.hid",
+        "fido2.client",
+        "fido2.webauthn",
         # 本地项目包 — 使用 packages 让 cx_Freeze 通过 _import_all_sub_modules 自动发现所有子模块
-        "gui", "core", "config", "utils", "_mext",
+        "gui",
+        "core",
+        "config",
+        "utils",
+        "_mext",
     ]
 
     includes = [
@@ -345,11 +394,26 @@ def run_cxfreeze(skip_flasher=False):
     ]
 
     excludes = [
-        "tkinter", "unittest", "test", "tests", "pytest", "IPython",
-        "notebook", "jupyter", "torch.testing", "torch.utils.tensorboard",
-        "torch.utils.benchmark", "torch.distributed", "torchvision",
-        "torchaudio", "scipy.spatial.cKDTree", "sympy",
-        "PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
+        "tkinter",
+        "unittest",
+        "test",
+        "tests",
+        "pytest",
+        "IPython",
+        "notebook",
+        "jupyter",
+        "torch.testing",
+        "torch.utils.tensorboard",
+        "torch.utils.benchmark",
+        "torch.distributed",
+        "torchvision",
+        "torchaudio",
+        "scipy.spatial.cKDTree",
+        "sympy",
+        "PySide6",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets",
         # OpenGL: 排除非 Windows 平台模块（finder.py:230 会跳过 excludes 中的模块）
         "OpenGL.platform.glx",
         "OpenGL.platform.darwin",
@@ -357,15 +421,25 @@ def run_cxfreeze(skip_flasher=False):
         "OpenGL.platform.osmesa",
         "OpenGL.platform.entrypoint31",
         # OpenGL: 排除不需要的子包（减小体积，防止间接引用报错）
-        "OpenGL.GLES1", "OpenGL.GLES2", "OpenGL.GLES3",
-        "OpenGL.GLU", "OpenGL.GLUT", "OpenGL.GLE",
-        "OpenGL.EGL", "OpenGL.GLX", "OpenGL.WGL",
-        "OpenGL.AGL", "OpenGL.Tk",
+        "OpenGL.GLES1",
+        "OpenGL.GLES2",
+        "OpenGL.GLES3",
+        "OpenGL.GLU",
+        "OpenGL.GLUT",
+        "OpenGL.GLE",
+        "OpenGL.EGL",
+        "OpenGL.GLX",
+        "OpenGL.WGL",
+        "OpenGL.AGL",
+        "OpenGL.Tk",
     ]
 
     include_files = [
         ("resources", "resources"),
-        ("resources/class_icons", "class_icons"),  # 运行时通过 class_icons/ 相对路径访问
+        (
+            "resources/class_icons",
+            "class_icons",
+        ),  # 运行时通过 class_icons/ 相对路径访问
     ]
     if os.path.exists("ffmpeg.exe"):
         include_files.append(("ffmpeg.exe", "ffmpeg.exe"))
@@ -388,7 +462,9 @@ def run_cxfreeze(skip_flasher=False):
         print(f"  Including av.libs: {av_libs_dir}")
 
     # 添加 Rust 模拟器
-    simulator_exe = os.path.join("simulator", "target", "release", "arknights_pass_simulator.exe")
+    simulator_exe = os.path.join(
+        "simulator", "target", "release", "arknights_pass_simulator.exe"
+    )
     if os.path.exists(simulator_exe):
         # 创建目标目录结构
         target_path = os.path.join("simulator", "arknights_pass_simulator.exe")
@@ -455,12 +531,14 @@ def run_cxfreeze(skip_flasher=False):
             version=VERSION,
             description="Arknights Pass Material Maker",
             options={"build_exe": build_options},
-            executables=[Executable(
-                script=MAIN_SCRIPT,
-                base=base,
-                target_name=f"{PROJECT_NAME}.exe",
-                icon=ICON_FILE if os.path.exists(ICON_FILE) else None,
-            )],
+            executables=[
+                Executable(
+                    script=MAIN_SCRIPT,
+                    base=base,
+                    target_name=f"{PROJECT_NAME}.exe",
+                    icon=ICON_FILE if os.path.exists(ICON_FILE) else None,
+                )
+            ],
             script_args=["build"],
         )
         license_file = os.path.join(BUILD_DIR, "frozen_application_license.txt")
@@ -469,6 +547,7 @@ def run_cxfreeze(skip_flasher=False):
         return True
     except Exception as e:
         import traceback
+
         print(f"\nBuild failed: {e}")
         traceback.print_exc()
         print(f"\nSearch paths ({len(search_paths)}):")
@@ -524,7 +603,8 @@ def create_installer():
     try:
         result = subprocess.run(
             [iscc, f"/DMyAppVersion={VERSION}", ISS_FILE],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             print(f"Inno Setup failed: {result.stderr}")
@@ -572,7 +652,8 @@ def main():
             print("Build completed!")
             print("=" * 50)
         else:
-            print("\nInstaller skipped")
+            print("\nInstaller creation failed")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

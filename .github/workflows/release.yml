@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   check-version:
@@ -95,6 +96,8 @@ jobs:
         with:
           name: ArknightsPassMaker-Build
           path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.build.outputs.artifact_run_id }}
 
       - name: Extract changelog for current version
         id: changelog
