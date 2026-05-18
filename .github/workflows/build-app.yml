@@ -130,6 +130,12 @@ jobs:
           fi
           uv run --no-sync python -c "import OpenGL, av, cv2, PyQt6, numpy; print('All packages OK')"
 
+      - name: Build and test protected core
+        shell: pwsh
+        run: |
+          uv run --no-sync python scripts/build_protected.py
+          uv run --no-sync python -m pytest tests/test_protected_core.py -v
+
       - name: Cache FFmpeg
         id: cache-ffmpeg
         uses: actions/cache@v4

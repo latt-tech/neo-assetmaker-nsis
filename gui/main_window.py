@@ -1,4 +1,4 @@
-#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
+﻿#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
 #我就是那个大笨蛋....啊哈哈哈....
 #呜呜呜....果然还是被抛弃了嘛....啊哈哈哈....
 """
@@ -7,6 +7,17 @@
 from core.error_handler import ErrorHandler, show_error
 from core.crash_recovery_service import CrashRecoveryService
 from core.auto_save_service import AutoSaveService, AutoSaveConfig
+from core.export_models import (
+    IconCaptureRequest,
+    LoopImageVideoRequest,
+    MaterialExportBuildRequest,
+    TransitionCropRequest,
+    VideoSelection,
+)
+from core.material_service_client import (
+    MaterialServiceClient,
+    MaterialServiceCommandThread,
+)
 from gui.widgets.json_preview import JsonPreviewWidget
 from gui.widgets.timeline import TimelineWidget
 from gui.widgets.transition_preview import TransitionPreviewWidget
@@ -69,6 +80,22 @@ class MainWindow(QMainWindow):
         self._intro_in_out: tuple[int, int] = (0, 0)  # 入场视频的(入点, 出点)
         # 时间轴当前连接的预览器
         self._timeline_preview: Optional['VideoPreviewWidget'] = None
+        self._material_service = MaterialServiceClient()
+        self._material_service_threads: set[MaterialServiceCommandThread] = set()
+        self._simulator_launch_pending = False
+        self._simulator_prepare_thread: MaterialServiceCommandThread | None = None
+        self._transition_crop_dirty = {"in": False, "loop": False}
+        self._transition_crop_running = {"in": False, "loop": False}
+        self._transition_crop_timers: dict[str, QTimer] = {}
+        for trans_type in ("in", "loop"):
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(
+                lambda trans_type=trans_type: self._dispatch_transition_crop(
+                    trans_type
+                )
+            )
+            self._transition_crop_timers[trans_type] = timer
 
         self._auto_save_service = AutoSaveService()
         self._crash_recovery_service = CrashRecoveryService()
@@ -1322,22 +1349,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            export_data = self._collect_export_data()
+            export_request = self._collect_export_request()
         except Exception as e:
             logger.error(f"收集导出数据失败: {e}")
             show_error(e, "收集导出数据", self)
             return
-
-        try:
-            self._process_arknights_custom_images(dir_path)
-        except Exception as e:
-            logger.error(f"处理自定义图片失败: {e}")
-            show_error(e, "处理自定义图片", self)
-
-        try:
-            self._process_image_overlay(dir_path)
-        except Exception as e:
-            logger.error(f"处理 ImageOverlay 失败: {e}")
 
         from core.export_service import ExportService
         from gui.dialogs.export_progress_dialog import ExportProgressDialog
@@ -1360,61 +1376,182 @@ class MainWindow(QMainWindow):
 
         self._export_service.export_all(
             output_dir=dir_path,
+            base_dir=self._base_dir,
             epconfig=self._config,
-            logo_mat=export_data.get('logo_mat'),
-            overlay_mat=export_data.get('overlay_mat'),
-            loop_video_params=export_data.get('loop_video_params'),
-            intro_video_params=export_data.get('intro_video_params'),
-            loop_image_path=export_data.get('loop_image_path'),
+            icon_path=export_request.get('icon_path', ''),
+            loop_video_params=export_request.get('loop_video_params'),
+            intro_video_params=export_request.get('intro_video_params'),
+            loop_image_path=export_request.get('loop_image_path'),
         )
 
         self._export_dialog.exec()
         return self._export_dialog, dir_path
 
-    def _on_simulator(self):
-        """打开模拟器预览"""
+    def _build_simulator_loop_request(
+        self,
+        *,
+        resolved_loop_path: str,
+    ) -> LoopImageVideoRequest:
+        return LoopImageVideoRequest(
+            base_dir=self._base_dir,
+            image_path=resolved_loop_path,
+            output_path="_sim_temp.mp4",
+            resolution="360x640",
+            fps=30.0,
+            frame_count=30,
+            config=self._config.to_dict(),
+            config_output_path="_sim_temp_config.json",
+        )
+
+    def _set_simulator_launch_busy(
+        self,
+        busy: bool,
+        message: str = "",
+    ) -> None:
+        self._simulator_launch_pending = busy
+        if hasattr(self, "timeline") and hasattr(self.timeline, "btn_preview"):
+            self.timeline.btn_preview.setEnabled(not busy)
+        if message:
+            self.status_bar.showMessage(message)
+
+    def _launch_simulator_process(
+        self,
+        *,
+        simulator_path: str,
+        config_for_simulator: str,
+        cropbox: tuple[int, int, int, int],
+        rotation: int,
+    ) -> None:
         import subprocess
 
+        logger.info(
+            f"启动模拟器: cropbox={cropbox}, rotation={rotation}, "
+            f"config_video={self._config.loop.file}, "
+            f"gui_video={self.video_preview.video_path}"
+        )
+
+        popen_kwargs = {"stderr": subprocess.PIPE}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        popen_kwargs["cwd"] = self._app_dir
+
+        env = os.environ.copy()
+        env["PATH"] = self._app_dir + os.pathsep + env.get("PATH", "")
+        ffmpeg_sdk_bin = os.path.join(self._app_dir, "ffmpeg-sdk", "bin")
+        if os.path.isdir(ffmpeg_sdk_bin):
+            env["PATH"] = ffmpeg_sdk_bin + os.pathsep + env["PATH"]
+        popen_kwargs["env"] = env
+
+        theme = "dark" if isDarkTheme() else "light"
+        proc = subprocess.Popen(
+            [
+                simulator_path,
+                "--config",
+                config_for_simulator,
+                "--base-dir",
+                self._base_dir,
+                "--app-dir",
+                self._app_dir,
+                "--cropbox",
+                f"{cropbox[0]},{cropbox[1]},{cropbox[2]},{cropbox[3]}",
+                "--rotation",
+                str(rotation),
+                "--theme",
+                theme,
+            ],
+            **popen_kwargs,
+        )
+
+        logger.info(f"模拟器已启动: {simulator_path}")
+        self.status_bar.showMessage("模拟器已启动")
+
+        self._simulator_proc = proc
+        self._simulator_check_count = 0
+
+        def _check_simulator_periodic():
+            self._simulator_check_count += 1
+            if self._simulator_proc is None:
+                return
+            retcode = self._simulator_proc.poll()
+            if retcode is not None and retcode != 0:
+                stderr_output = ""
+                try:
+                    stderr_output = self._simulator_proc.stderr.read().decode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                except Exception:
+                    pass
+                QMessageBox.warning(
+                    self,
+                    "模拟器错误",
+                    f"模拟器异常退出（返回码: {retcode}）\n\n"
+                    f"可能原因：\n"
+                    f"• FFmpeg DLL 缺失或版本不匹配\n"
+                    f"• 视频文件损坏或格式不支持\n"
+                    f"• 配置文件格式错误\n\n"
+                    f"路径: {simulator_path}"
+                    + (f"\n\n日志输出:\n{stderr_output[:500]}" if stderr_output else ""),
+                )
+                self._simulator_proc = None
+                return
+            if retcode is not None:
+                try:
+                    self._simulator_proc.stderr.close()
+                except Exception:
+                    pass
+                self._simulator_proc = None
+                return
+            if self._simulator_check_count < 5:
+                QTimer.singleShot(2000, _check_simulator_periodic)
+            else:
+                self._simulator_proc = None
+
+        QTimer.singleShot(1000, _check_simulator_periodic)
+
+    def _on_simulator(self):
+        """Open the simulator preview."""
         if not self._config:
-            QMessageBox.information(self, "提示", "请先创建或打开项目")
+            QMessageBox.information(self, "Info", "Please create or open a project first")
             return
 
-        if not self._config.loop.file:
+        if self._simulator_launch_pending:
+            self.status_bar.showMessage("Preparing simulator preview...")
+            return
+
+        loop_file = self._config.loop.file
+        if not loop_file:
             QMessageBox.warning(
-                self, "警告",
-                "请先配置循环视频文件\n\n"
-                "在配置面板的'视频配置'选项卡中选择循环视频文件"
+                self,
+                "Warning",
+                "Please configure a loop asset before opening the simulator preview",
             )
             return
 
-        # 安装模式路径（扁平化）
         simulator_path = os.path.join(
             self._app_dir,
-            "simulator", "arknights_pass_simulator.exe"
+            "simulator",
+            "arknights_pass_simulator.exe",
         )
-        # 开发模式 fallback：Cargo 默认输出路径
         if not os.path.exists(simulator_path):
             simulator_path = os.path.join(
                 self._app_dir,
-                "simulator", "target", "release", "arknights_pass_simulator.exe"
+                "simulator",
+                "target",
+                "release",
+                "arknights_pass_simulator.exe",
             )
 
         if not os.path.exists(simulator_path):
             QMessageBox.information(
-                self, "提示",
-                f"模拟器未找到\n\n"
-                f"模拟器功能需要先编译 Rust 模拟器:\n"
-                f"cd simulator && cargo build --release\n\n"
-                f"路径: {simulator_path}\n\n"
-                f"如果您不需要使用模拟器预览功能，可以忽略此提示。"
+                self,
+                "Info",
+                "Simulator executable was not found. Build it first with `cd simulator && cargo build --release`.",
             )
             return
 
         try:
-            # 启动模拟器前自动保存，确保磁盘配置与 GUI 状态一致
-            # 模拟器从磁盘读取 epconfig.json（不共享 GUI 内存），
-            # 而导出直接使用 video_preview.video_path（内存中的当前视频）。
-            # 如果用户修改了视频但未保存，模拟器会打开旧视频 → 画面完全不同。
             if self._is_modified:
                 if self._project_path:
                     try:
@@ -1422,188 +1559,117 @@ class MainWindow(QMainWindow):
                         self._is_modified = False
                         self._update_title()
                         logger.info(
-                            f"模拟器启动前自动保存: {self._project_path}")
+                            "Auto-saved project before launching simulator: %s",
+                            self._project_path,
+                        )
                     except Exception as e:
-                        logger.warning(f"自动保存失败: {e}")
+                        logger.warning("Auto-save before simulator launch failed: %s", e)
                         QMessageBox.warning(
-                            self, "警告",
-                            f"自动保存失败，模拟器预览可能不准确\n\n{e}"
+                            self,
+                            "Warning",
+                            f"Auto-save failed before launching the simulator:\n\n{e}",
                         )
                         return
                 else:
                     QMessageBox.warning(
-                        self, "警告",
-                        "请先保存项目配置\n\n"
-                        "文件 → 保存项目"
+                        self,
+                        "Warning",
+                        "Please save the project configuration before launching the simulator.",
                     )
                     return
 
             config_path = self._project_path
-
-            if not os.path.exists(config_path):
+            if not config_path or not os.path.exists(config_path):
                 QMessageBox.warning(
-                    self, "警告",
-                    "请先保存项目配置\n\n"
-                    "文件 → 保存项目"
+                    self,
+                    "Warning",
+                    "Please save the project configuration before launching the simulator.",
                 )
                 return
 
-            # 预验证：模拟 Rust 端路径解析，确认视频文件可达
-            loop_file = self._config.loop.file
-            if loop_file:
-                if os.path.isabs(loop_file):
-                    resolved_video_path = loop_file
-                else:
-                    resolved_video_path = os.path.join(
-                        self._base_dir, loop_file)
+            if os.path.isabs(loop_file):
+                resolved_loop_path = loop_file
+            else:
+                resolved_loop_path = os.path.join(self._base_dir, loop_file)
 
-                if not os.path.exists(resolved_video_path):
-                    QMessageBox.warning(
-                        self, "视频文件不存在",
-                        f"模拟器预览需要的视频文件未找到：\n\n"
-                        f"配置路径: {loop_file}\n"
-                        f"解析路径: {resolved_video_path}\n"
-                        f"基础目录: {self._base_dir}\n\n"
-                        f"请确认视频文件存在或重新选择视频"
-                    )
-                    return
-
-            # 图片模式：生成临时视频供模拟器使用
-            config_for_simulator = config_path
-            if self._config.loop.is_image and loop_file:
-                try:
-                    import av
-                    import cv2
-                    import numpy as np
-                    temp_video = os.path.join(
-                        self._base_dir, "_sim_temp.mp4")
-                    img_data = np.fromfile(
-                        resolved_video_path, dtype=np.uint8)
-                    frame_bgr = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
-                    if frame_bgr is None:
-                        raise RuntimeError(
-                            f"无法读取图片: {resolved_video_path}")
-                    frame_bgr = cv2.resize(frame_bgr, (360, 640))
-                    container = av.open(temp_video, mode='w')
-                    stream = container.add_stream('libx264', rate=30)
-                    stream.width, stream.height = 360, 640
-                    stream.pix_fmt = 'yuv420p'
-                    for _ in range(30):  # 1 秒循环
-                        av_frame = av.VideoFrame.from_ndarray(
-                            cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB),
-                            format='rgb24')
-                        for packet in stream.encode(av_frame):
-                            container.mux(packet)
-                    for packet in stream.encode():
-                        container.mux(packet)
-                    container.close()
-                    # 写入临时配置，替换图片为临时视频
-                    temp_config = self._config.copy()
-                    temp_config.loop.file = "_sim_temp.mp4"
-                    temp_config.loop.is_image = False
-                    temp_config_path = os.path.join(
-                        self._base_dir, "_sim_temp_config.json")
-                    temp_config.save_to_file(temp_config_path)
-                    config_for_simulator = temp_config_path
-                    logger.info(f"图片转临时视频: {temp_video}")
-                except Exception as e:
-                    logger.warning(f"图片转临时视频失败: {e}")
-                    QMessageBox.warning(
-                        self, "提示",
-                        f"图片模式暂不支持模拟器预览\n\n"
-                        f"原因：图片转换失败：{e}\n"
-                        f"建议先导出素材后再使用模拟器预览")
-                    return
+            if not os.path.exists(resolved_loop_path):
+                QMessageBox.warning(
+                    self,
+                    "Missing asset",
+                    "The loop asset required by the simulator preview was not found.\n\n"
+                    f"Configured path: {loop_file}\n"
+                    f"Resolved path: {resolved_loop_path}\n"
+                    f"Base dir: {self._base_dir}",
+                )
+                return
 
             cropbox = self.video_preview.get_cropbox_in_rotated_space()
             rotation = self.video_preview.get_rotation()
 
-            logger.info(
-                f"启动模拟器: cropbox={cropbox}, rotation={rotation}, "
-                f"config_video={self._config.loop.file}, "
-                f"gui_video={self.video_preview.video_path}")
+            if self._config.loop.is_image:
+                request = self._build_simulator_loop_request(
+                    resolved_loop_path=resolved_loop_path,
+                )
+                self._set_simulator_launch_busy(True, "Preparing simulator preview...")
 
-            popen_kwargs = {'stderr': subprocess.PIPE}
-            if sys.platform == 'win32':
-                popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-
-            # 设置工作目录为应用根目录，确保模拟器能找到 FFmpeg DLL
-            # Windows DLL 搜索顺序：exe 所在目录 → system32 → PATH
-            # 模拟器 exe 在 simulator/ 子目录（安装模式）或 simulator/target/release/（开发模式），
-            # 均无法直接找到根目录的 FFmpeg DLL，需要通过 cwd 和 PATH 解决
-            popen_kwargs['cwd'] = self._app_dir
-
-            # 双保险：将 app_dir 加入 PATH 环境变量
-            env = os.environ.copy()
-            env['PATH'] = self._app_dir + os.pathsep + env.get('PATH', '')
-            # 开发模式：FFmpeg DLL 可能在 ffmpeg-sdk/bin/ 子目录
-            ffmpeg_sdk_bin = os.path.join(self._app_dir, 'ffmpeg-sdk', 'bin')
-            if os.path.isdir(ffmpeg_sdk_bin):
-                env['PATH'] = ffmpeg_sdk_bin + os.pathsep + env['PATH']
-            popen_kwargs['env'] = env
-
-            # Detect current theme to pass to simulator
-            from qfluentwidgets import isDarkTheme
-            theme = "dark" if isDarkTheme() else "light"
-
-            proc = subprocess.Popen([
-                simulator_path,
-                "--config", config_for_simulator,
-                "--base-dir", self._base_dir,
-                "--app-dir", self._app_dir,
-                "--cropbox", f"{cropbox[0]},{cropbox[1]},{cropbox[2]},{cropbox[3]}",
-                "--rotation", str(rotation),
-                "--theme", theme,
-            ], **popen_kwargs)
-
-            logger.info(f"模拟器已启动: {simulator_path}")
-
-            # 定期检查进程状态（最多检查5次，覆盖启动后10秒内的崩溃）
-            self._simulator_proc = proc
-            self._simulator_check_count = 0
-
-            def _check_simulator_periodic():
-                self._simulator_check_count += 1
-                if self._simulator_proc is None:
-                    return
-                retcode = self._simulator_proc.poll()
-                if retcode is not None and retcode != 0:
-                    stderr_output = ""
+                def _handle_complete(result: dict) -> None:
+                    self._simulator_prepare_thread = None
                     try:
-                        stderr_output = self._simulator_proc.stderr.read(
-                            ).decode('utf-8', errors='replace')
-                    except Exception:
-                        pass
-                    QMessageBox.warning(
-                        self, "模拟器错误",
-                        f"模拟器异常退出（返回码: {retcode}）\n\n"
-                        f"可能原因：\n"
-                        f"• FFmpeg DLL 缺失或版本不匹配\n"
-                        f"• 视频文件损坏或格式不支持\n"
-                        f"• 配置文件格式错误\n\n"
-                        f"路径: {simulator_path}"
-                        + (f"\n\n日志输出:\n{stderr_output[:500]}"
-                           if stderr_output else "")
+                        config_for_simulator = str(
+                            result.get("config_path") or config_path
+                        )
+                        self._launch_simulator_process(
+                            simulator_path=simulator_path,
+                            config_for_simulator=config_for_simulator,
+                            cropbox=cropbox,
+                            rotation=rotation,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "Failed to launch simulator after loop-image preparation: %s",
+                            e,
+                        )
+                        show_error(e, "Launch simulator", self)
+                    finally:
+                        self._set_simulator_launch_busy(False)
+
+                def _handle_failed(message: str) -> None:
+                    self._simulator_prepare_thread = None
+                    logger.warning(
+                        "Failed to prepare simulator loop video: %s",
+                        message,
                     )
-                    self._simulator_proc = None
-                    return
-                elif retcode is not None:
-                    # 正常退出，关闭 stderr pipe
-                    try:
-                        self._simulator_proc.stderr.close()
-                    except Exception:
-                        pass
-                    self._simulator_proc = None
-                    return
-                if self._simulator_check_count < 5:
-                    QTimer.singleShot(2000, _check_simulator_periodic)
-                else:
-                    self._simulator_proc = None
-            QTimer.singleShot(1000, _check_simulator_periodic)
+                    self._set_simulator_launch_busy(False)
+                    QMessageBox.warning(
+                        self,
+                        "Warning",
+                        f"Image loop preview is unavailable for the simulator: {message}",
+                    )
+
+                def _handle_progress(percent: int, message: str) -> None:
+                    progress_text = message or "Preparing simulator preview..."
+                    self.status_bar.showMessage(f"{progress_text} ({percent}%)")
+
+                self._simulator_prepare_thread = self._start_material_service_thread(
+                    "prepare_loop_image_video",
+                    request.to_dict(),
+                    on_completed=_handle_complete,
+                    on_failed=_handle_failed,
+                    on_progress=_handle_progress,
+                    timeout=30.0,
+                )
+                return
+
+            self._launch_simulator_process(
+                simulator_path=simulator_path,
+                config_for_simulator=config_path,
+                cropbox=cropbox,
+                rotation=rotation,
+            )
 
         except Exception as e:
-            logger.error(f"启动模拟器失败: {e}")
-            show_error(e, "启动模拟器", self)
+            logger.error(f"Failed to launch simulator: {e}")
+            show_error(e, "Launch simulator", self)
 
     def _on_flasher(self):
         """启动固件烧录工具"""
@@ -3035,48 +3101,85 @@ class MainWindow(QMainWindow):
         self.transition_preview.load_image(trans_type, abs_path)
         self.preview_tabs.setCurrentIndex(2)
 
+    def _start_material_service_thread(
+        self,
+        command: str,
+        payload: dict,
+        *,
+        on_completed=None,
+        on_failed=None,
+        on_progress=None,
+        timeout: float | None = None,
+    ) -> MaterialServiceCommandThread:
+        thread = MaterialServiceCommandThread(
+            self._material_service,
+            command,
+            payload,
+            timeout=timeout,
+            parent=self,
+        )
+        self._material_service_threads.add(thread)
+
+        def _cleanup() -> None:
+            self._material_service_threads.discard(thread)
+            thread.deleteLater()
+
+        if on_completed is not None:
+            thread.completed.connect(on_completed)
+        if on_failed is not None:
+            thread.failed.connect(on_failed)
+        if on_progress is not None:
+            thread.progress.connect(on_progress)
+        thread.finished.connect(_cleanup)
+        thread.start()
+        return thread
+
     def _on_transition_crop_changed(self, trans_type: str):
         """过渡图片 cropbox 变化 → 裁切原始图片并保存"""
-        if not self._base_dir:
+        if trans_type not in self._transition_crop_dirty:
             return
+        self._transition_crop_dirty[trans_type] = True
+        self._transition_crop_timers[trans_type].start(120)
 
-        import cv2
-        import glob
-
-        pattern = os.path.join(self._base_dir, f"trans_{trans_type}_src.*")
-        matches = glob.glob(pattern)
-        if not matches:
+    def _dispatch_transition_crop(self, trans_type: str) -> None:
+        if not self._base_dir or not self._transition_crop_dirty[trans_type]:
             return
-
-        src_path = matches[0]
-        original = cv2.imread(src_path, cv2.IMREAD_UNCHANGED)
-        if original is None:
+        if self._transition_crop_running[trans_type]:
             return
-
-        x, y, w, h = self.transition_preview.get_cropbox(trans_type)
-
-        img_h, img_w = original.shape[:2]
-        x = max(0, min(x, img_w - 1))
-        y = max(0, min(y, img_h - 1))
-        w = min(w, img_w - x)
-        h = min(h, img_h - y)
-
-        if w <= 0 or h <= 0:
-            return
-
-        cropped = original[y:y + h, x:x + w]
 
         target_w, target_h = self._get_target_resolution()
-        resized = cv2.resize(cropped, (target_w, target_h),
-                             interpolation=cv2.INTER_AREA)
+        payload = TransitionCropRequest(
+            base_dir=self._base_dir,
+            trans_type=trans_type,
+            cropbox=self.transition_preview.get_cropbox(trans_type),
+            target_resolution=(target_w, target_h),
+        ).to_dict()
 
-        out_path = os.path.join(
-            self._base_dir,
-            f"trans_{trans_type}_image.png")
-        success, encoded = cv2.imencode('.png', resized)
-        if success:
-            with open(out_path, 'wb') as f:
-                f.write(encoded.tobytes())
+        self._transition_crop_dirty[trans_type] = False
+        self._transition_crop_running[trans_type] = True
+
+        def _handle_complete(_result: dict) -> None:
+            self._transition_crop_running[trans_type] = False
+            if self._transition_crop_dirty[trans_type]:
+                self._transition_crop_timers[trans_type].start(50)
+
+        def _handle_failed(message: str) -> None:
+            logger.warning(
+                "Transition crop update failed for %s: %s",
+                trans_type,
+                message,
+            )
+            self._transition_crop_running[trans_type] = False
+            if self._transition_crop_dirty[trans_type]:
+                self._transition_crop_timers[trans_type].start(200)
+
+        self._start_material_service_thread(
+            "crop_transition_image",
+            payload,
+            on_completed=_handle_complete,
+            on_failed=_handle_failed,
+            timeout=10.0,
+        )
 
     def _get_target_resolution(self):
         """获取当前选择的目标分辨率"""
@@ -3160,267 +3263,130 @@ class MainWindow(QMainWindow):
         logger.info("截取视频帧完成")
         self.status_bar.showMessage("已截取视频帧，请调整裁切框后点击\"保存为图标\"")
 
+    def _build_icon_capture_request(self) -> IconCaptureRequest:
+        source_preview = getattr(self, "_current_video_preview", None)
+        if source_preview is None:
+            raise RuntimeError("No captured source preview is available")
+
+        cropbox = self.frame_capture_preview.get_cropbox()
+        if len(cropbox) != 4:
+            raise RuntimeError(f"Invalid cropbox: {cropbox}")
+
+        source_type = "video"
+        source_path = source_preview.video_path
+        frame_index = int(getattr(source_preview, "current_frame_index", 0))
+
+        if (
+            self._config is not None
+            and source_preview is self.video_preview
+            and self._config.loop.is_image
+        ):
+            source_type = "image"
+            source_path = self._loop_image_path or self._config.loop.file
+            frame_index = 0
+
+        if not source_path:
+            raise RuntimeError("No source asset is available for icon capture")
+
+        return IconCaptureRequest(
+            base_dir=self._base_dir,
+            source_type=source_type,
+            source_path=source_path,
+            output_path="icon.png",
+            cropbox=tuple(int(value) for value in cropbox),
+            rotation=int(source_preview.get_rotation()),
+            frame_index=frame_index,
+        )
+
     def _on_save_captured_icon(self):
-        """从截取帧编辑的 cropbox 保存图标"""
-        logger.info("开始保存图标")
+        """Save the icon using the persistent material service."""
+        logger.info("Starting icon save")
 
         if not self._base_dir:
-            logger.warning("_base_dir 不存在，显示警告")
-            QMessageBox.warning(self, "警告", "请先创建或打开项目")
+            logger.warning("Missing base_dir while saving icon")
+            QMessageBox.warning(self, "Warning", "Please create or open a project first")
             return
 
         frame = self.frame_capture_preview.current_frame
-        logger.info(f"当前帧: {frame}")
-
         if frame is None:
-            logger.warning("当前帧为 None，显示警告")
-            QMessageBox.warning(self, "警告", "请先截取视频帧")
+            logger.warning("No captured frame is available for icon save")
+            QMessageBox.warning(self, "Warning", "Please capture a frame first")
             return
 
         try:
-            import cv2
-
-            cropbox = self.frame_capture_preview.get_cropbox()
-            logger.info(f"裁剪框: {cropbox}")
-
-            if len(cropbox) != 4:
-                logger.error(f"裁剪框格式错误: {cropbox}")
-                QMessageBox.warning(self, "错误", "裁剪框格式错误")
-                return
-
-            x, y, w, h = cropbox
-
-            frame_h, frame_w = frame.shape[:2]
-            logger.info(f"帧尺寸: {frame_w}x{frame_h}")
-
-            x = max(0, min(x, frame_w - 1))
-            y = max(0, min(y, frame_h - 1))
-            w = min(w, frame_w - x)
-            h = min(h, frame_h - y)
-
-            logger.info(f"调整后的裁剪框: x={x}, y={y}, w={w}, h={h}")
-
-            if w <= 0 or h <= 0:
-                logger.warning("裁切区域无效")
-                QMessageBox.warning(self, "错误", "裁切区域无效")
-                return
-
-            logger.info("开始裁剪帧")
-            cropped = frame[y:y + h, x:x + w]
-            logger.info(f"裁剪后的尺寸: {cropped.shape}")
-
-            icon_path = os.path.join(self._base_dir, "icon.png")
-            logger.info(f"保存图标到: {icon_path}")
-
-            success, encoded = cv2.imencode('.png', cropped)
-            if success:
-                with open(icon_path, 'wb') as f:
-                    f.write(encoded.tobytes())
-                self.advanced_config_panel.edit_icon.setText("icon.png")
-                self.status_bar.showMessage("已保存图标")
-                logger.info("图标保存成功")
-            else:
-                logger.error("保存图标失败")
-                QMessageBox.warning(self, "错误", "保存图标失败")
-
+            request = self._build_icon_capture_request()
         except Exception as e:
-            logger.error(f"保存图标时发生错误: {e}", exc_info=True)
-            QMessageBox.critical(self, "错误", f"保存图标时发生错误: {str(e)}")
+            logger.error(f"Failed to build icon capture request: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to prepare icon save: {e}")
+            return
 
-    def _collect_export_data(self) -> dict:
-        """收集导出所需的数据"""
-        from core.export_service import VideoExportParams
-        from core.image_processor import ImageProcessor
+        self.status_bar.showMessage("Saving icon...")
 
-        data = {}
+        def _handle_complete(result: dict) -> None:
+            relative_path = result.get("relative_output_path", "icon.png")
+            self.advanced_config_panel.edit_icon.setText(relative_path)
+            self.status_bar.showMessage("Icon saved")
+            logger.info("Icon saved: %s", result.get("output_path", ""))
 
-        icon_path = self._config.icon
-        if icon_path:
-            if not os.path.isabs(icon_path):
-                icon_path = os.path.join(self._base_dir, icon_path)
-            if os.path.exists(icon_path):
-                logo_img = ImageProcessor.load_image(icon_path)
-                if logo_img is not None:
-                    data['logo_mat'] = ImageProcessor.process_for_logo(
-                        logo_img)
+        def _handle_failed(message: str) -> None:
+            logger.error("Icon save failed: %s", message)
+            QMessageBox.critical(self, "Error", f"Icon save failed: {message}")
 
-        if self._config.loop.is_image:
-            if hasattr(self, '_loop_image_path') and self._loop_image_path:
-                data['loop_image_path'] = self._loop_image_path
-                data['is_loop_image'] = True
-        elif self.video_preview.video_path:
-            cropbox = self.video_preview.get_cropbox_in_rotated_space()
-            rotation = self.video_preview.get_rotation()
-            in_point = self.timeline.get_in_point()
-            out_point = self.timeline.get_out_point()
+        self._start_material_service_thread(
+            "capture_icon",
+            request.to_dict(),
+            on_completed=_handle_complete,
+            on_failed=_handle_failed,
+            timeout=20.0,
+        )
 
-            data['loop_video_params'] = VideoExportParams(
+    def _collect_export_request(self) -> dict:
+        """鏀堕泦瀵煎嚭鎵€闇€鐨勬暟鎹?"""
+        loop_in_point, loop_out_point = self._loop_in_out
+        intro_in_point, intro_out_point = self._intro_in_out
+        if self._timeline_preview is self.video_preview:
+            loop_in_point = self.timeline.get_in_point()
+            loop_out_point = self.timeline.get_out_point()
+        elif self._timeline_preview is self.intro_preview:
+            intro_in_point = self.timeline.get_in_point()
+            intro_out_point = self.timeline.get_out_point()
+
+        loop_selection = None
+        if not self._config.loop.is_image and self.video_preview.video_path:
+            loop_selection = VideoSelection(
                 video_path=self.video_preview.video_path,
-                cropbox=cropbox,
-                start_frame=in_point,
-                end_frame=out_point,
+                cropbox=self.video_preview.get_cropbox_in_rotated_space(),
+                start_frame=loop_in_point,
+                end_frame=loop_out_point,
                 fps=self.video_preview.video_fps,
-                resolution=self._config.screen.value,
-                rotation=rotation
+                rotation=self.video_preview.get_rotation(),
             )
 
+        intro_selection = None
         if self._config.intro.enabled and self._config.intro.file:
             if self.intro_preview.video_path:
-                cropbox = self.intro_preview.get_cropbox_in_rotated_space()
-                rotation = self.intro_preview.get_rotation()
-
-                data['intro_video_params'] = VideoExportParams(
+                intro_selection = VideoSelection(
                     video_path=self.intro_preview.video_path,
-                    cropbox=cropbox,
-                    start_frame=0,
-                    end_frame=self.intro_preview.total_frames,
+                    cropbox=self.intro_preview.get_cropbox_in_rotated_space(),
+                    start_frame=intro_in_point,
+                    end_frame=intro_out_point,
                     fps=self.intro_preview.video_fps,
-                    resolution=self._config.screen.value,
-                    rotation=rotation
+                    rotation=self.intro_preview.get_rotation(),
                 )
-            else:
-                intro_path = self._config.intro.file
-                if not os.path.isabs(intro_path):
-                    intro_path = os.path.join(self._base_dir, intro_path)
 
-                if os.path.exists(intro_path):
-                    try:
-                        import av
-                    except ImportError:
-                        logger.warning("PyAV 不可用，跳过片头视频元数据读取")
-                        av = None
-
-                    try:
-                        if av is None:
-                            raise RuntimeError("PyAV unavailable")
-                        container = av.open(intro_path)
-                        stream = container.streams.video[0]
-                        fps = float(stream.average_rate) if stream.average_rate else 30.0
-                        width = stream.width
-                        height = stream.height
-                        total_frames = stream.frames
-                        if total_frames == 0 and stream.duration and stream.time_base:
-                            total_frames = max(1, int(
-                                float(stream.duration * stream.time_base) * fps))
-                        if total_frames == 0:
-                            total_frames = 1
-                        container.close()
-
-                        data['intro_video_params'] = VideoExportParams(
-                            video_path=intro_path,
-                            cropbox=(0, 0, width, height),
-                            start_frame=0,
-                            end_frame=total_frames,
-                            fps=fps,
-                            resolution=self._config.screen.value,
-                            rotation=0
-                        )
-                    except Exception as e:
-                        logger.warning(f"无法读取片头视频元数据: {e}")
-
-        from config.epconfig import OverlayType
-        if self._config.overlay.type == OverlayType.IMAGE:
-            if self._config.overlay.image_options and self._config.overlay.image_options.image:
-                img_path = self._config.overlay.image_options.image
-                if not os.path.isabs(img_path):
-                    img_path = os.path.join(self._base_dir, img_path)
-                if os.path.exists(img_path):
-                    overlay_img = ImageProcessor.load_image(img_path)
-                    if overlay_img is not None:
-                        spec = get_resolution_spec(self._config.screen.value)
-                        target_size = (spec['width'], spec['height'])
-
-                        import cv2
-                        overlay_img = cv2.resize(overlay_img, target_size)
-                        data['overlay_mat'] = overlay_img
-
-        return data
-
-    def _process_arknights_custom_images(self, output_dir: str):
-        """
-        处理arknights叠加的自定义图片
-
-        将自定义的logo和operator_class_icon缩放后复制到导出目录
-
-        Args:
-            output_dir: 导出目录
-        """
-        from config.epconfig import OverlayType
-        from config.constants import ARK_CLASS_ICON_SIZE, ARK_LOGO_SIZE
-        from core.image_processor import ImageProcessor
-        import cv2
-
-        if not self._config:
-            return
-
-        if self._config.overlay.type != OverlayType.ARKNIGHTS:
-            return
-
-        ark_opts = self._config.overlay.arknights_options
-        if not ark_opts:
-            return
-
-        if ark_opts.operator_class_icon:
-            src_path = ark_opts.operator_class_icon
-            if not os.path.isabs(src_path):
-                src_path = os.path.join(self._base_dir, src_path)
-
-            if os.path.exists(src_path):
-                img = ImageProcessor.load_image(src_path)
-                if img is not None:
-                    img = cv2.resize(img, ARK_CLASS_ICON_SIZE)
-                    dst_filename = "class_icon.png"
-                    dst_path = os.path.join(output_dir, dst_filename)
-                    success, encoded = cv2.imencode('.png', img)
-                    if success:
-                        with open(dst_path, 'wb') as f:
-                            f.write(encoded.tobytes())
-                        logger.info(f"已导出职业图标: {dst_path}")
-
-        if ark_opts.logo:
-            src_path = ark_opts.logo
-            if not os.path.isabs(src_path):
-                src_path = os.path.join(self._base_dir, src_path)
-
-            if os.path.exists(src_path):
-                img = ImageProcessor.load_image(src_path)
-                if img is not None:
-                    img = cv2.resize(img, ARK_LOGO_SIZE)
-                    dst_filename = "ark_logo.png"
-                    dst_path = os.path.join(output_dir, dst_filename)
-                    success, encoded = cv2.imencode('.png', img)
-                    if success:
-                        with open(dst_path, 'wb') as f:
-                            f.write(encoded.tobytes())
-                        logger.info(f"已导出Logo: {dst_path}")
-
-    def _process_image_overlay(self, output_dir: str):
-        """处理 ImageOverlay 的图片导出和路径标准化"""
-        from config.epconfig import OverlayType
-        from core.image_processor import ImageProcessor
-        import cv2
-
-        if not self._config:
-            return
-
-        if self._config.overlay.type != OverlayType.IMAGE:
-            return
-
-        if self._config.overlay.image_options and self._config.overlay.image_options.image:
-            src_path = self._config.overlay.image_options.image
-            if not os.path.isabs(src_path):
-                src_path = os.path.join(self._base_dir, src_path)
-
-            if os.path.exists(src_path):
-                img = ImageProcessor.load_image(src_path)
-                if img is not None:
-                    dst_filename = "overlay.png"
-                    dst_path = os.path.join(output_dir, dst_filename)
-                    success, encoded = cv2.imencode('.png', img)
-                    if success:
-                        with open(dst_path, 'wb') as f:
-                            f.write(encoded.tobytes())
-                        logger.info(f"已导出叠加图片: {dst_path}")
+        request = MaterialExportBuildRequest(
+            base_dir=self._base_dir,
+            config=self._config.to_dict(),
+            icon_path=self._config.icon or "",
+            loop_image_path=self._loop_image_path or "",
+            loop_video_selection=loop_selection,
+            intro_video_selection=intro_selection,
+        )
+        return self._material_service.request(
+            "build_export_request",
+            request.to_dict(),
+            timeout=20.0,
+        )
 
     def _on_export_completed(self, success: bool, message: str):
         """导出完成回调"""
@@ -3527,6 +3493,9 @@ class MainWindow(QMainWindow):
             self._cleanup_temp_dir()
 
             self._auto_save_service.stop()
+            self._material_service.close()
+            for thread in list(self._material_service_threads):
+                thread.wait(2000)
 
             if hasattr(self, '_forum_widget'):
                 self._forum_widget.shutdown()
@@ -3669,3 +3638,4 @@ class MainWindow(QMainWindow):
         if event.button() == Qt.MouseButton.LeftButton:
             self._is_resizing = False
             self._resize_direction = None
+

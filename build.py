@@ -8,11 +8,16 @@ import subprocess
 import argparse
 import shutil
 import urllib.request
+from pathlib import Path
 
 sys.setrecursionlimit(10000)
 
 PROJECT_NAME = "ArknightsPassMaker"
 MAIN_SCRIPT = "main.py"
+WORKER_SCRIPT = os.path.join("protected_worker", "worker_main.py")
+WORKER_EXE_NAME = "material_core_worker.exe"
+SERVICE_SCRIPT = os.path.join("protected_worker", "service_main.py")
+SERVICE_EXE_NAME = "material_core_service.exe"
 ICON_FILE = "resources/icons/favicon.ico"
 
 
@@ -36,6 +41,14 @@ BUILD_DIR = PROJECT_NAME
 DIST_DIR = "dist"
 ISS_FILE = "installer.iss"
 INNO_SETUP_DIR = "tools/innosetup"
+PROTECTED_MODULES = (
+    "export_core",
+    "video_core",
+    "overlay_core",
+    "epconfig_core",
+    "validator_core",
+    "image_core",
+)
 
 
 def parse_args():
@@ -160,6 +173,86 @@ def _diagnose_build_env():
     print("--- End ---\n")
 
 
+def build_protected_core(project_root: str) -> list[str]:
+    """Compile protected core modules before freezing the application."""
+    print("Building protected core modules...")
+    script_path = os.path.join(project_root, "scripts", "build_protected.py")
+    subprocess.run([sys.executable, script_path], check=True)
+
+    protected_dir = Path(project_root) / "core" / "_protected"
+    compiled_files = []
+    for module_name in PROTECTED_MODULES:
+        matches = sorted(protected_dir.glob(f"{module_name}*.pyd"))
+        if not matches:
+            raise RuntimeError(f"Missing compiled protected module: {module_name}")
+        compiled_files.append(str(matches[-1]))
+        print(f"  Protected module: {matches[-1].name}")
+    source_dir = Path(project_root) / "protected_src" / "material_core"
+    for generated_c in protected_dir.glob("*.c"):
+        generated_c.unlink()
+    for generated_c in source_dir.glob("*.c"):
+        generated_c.unlink()
+    return compiled_files
+
+
+def audit_protection_layout(project_root: str, build_root: str) -> None:
+    """Fail the build if protected source artifacts leak into runtime paths."""
+    protected_runtime_dir = Path(project_root) / "core" / "_protected"
+    leaked_sources = [
+        path.name
+        for path in protected_runtime_dir.glob("*.py")
+        if path.name != "__init__.py"
+    ]
+    if leaked_sources:
+        leaked = ", ".join(sorted(leaked_sources))
+        raise RuntimeError(
+            f"Protected runtime directory still contains source files: {leaked}"
+        )
+
+    leaked_worker_dir = Path(build_root) / "lib" / "protected_worker"
+    if leaked_worker_dir.exists():
+        raise RuntimeError(
+            "Build output leaked the protected_worker package; "
+            "ship the dedicated worker executable instead"
+        )
+
+    for executable_name in (WORKER_EXE_NAME, SERVICE_EXE_NAME):
+        executable_path = Path(build_root) / executable_name
+        if not executable_path.exists():
+            raise RuntimeError(
+                "Build output is missing required helper executable: "
+                f"{executable_name}"
+            )
+
+    protected_build_dir = Path(build_root) / "lib" / "core" / "_protected"
+    if not protected_build_dir.exists():
+        return
+
+    bad_artifacts = [
+        path.name
+        for path in protected_build_dir.iterdir()
+        if path.suffix.lower() in {".py", ".pyc", ".c"}
+        and path.name != "__init__.pyc"
+    ]
+    if bad_artifacts:
+        leaked = ", ".join(sorted(bad_artifacts))
+        raise RuntimeError(f"Build output leaked protected source artifacts: {leaked}")
+
+    forbidden_strings = [
+        os.path.join("protected_src", "material_core"),
+        os.path.join(project_root, "protected_src", "material_core"),
+    ]
+    for binary in protected_build_dir.glob("*.pyd"):
+        data = binary.read_bytes()
+        for pattern in forbidden_strings:
+            if pattern.encode("utf-8", errors="ignore") in data:
+                print(
+                    f"  Warning: protected binary still embeds source path markers: "
+                    f"{binary.name}"
+                )
+                break
+
+
 def _verify_modules(search_paths, project_root):
     """统一验证所有关键模块可被 PathFinder 发现
 
@@ -281,6 +374,7 @@ def run_cxfreeze(skip_flasher=False):
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
     print(f"Project root: {project_root}")
+    protected_binaries = build_protected_core(project_root)
 
     # 输出构建环境诊断信息
     _diagnose_build_env()
@@ -432,6 +526,12 @@ def run_cxfreeze(skip_flasher=False):
         "OpenGL.WGL",
         "OpenGL.AGL",
         "OpenGL.Tk",
+        "core._protected.export_core",
+        "core._protected.video_core",
+        "core._protected.overlay_core",
+        "core._protected.epconfig_core",
+        "core._protected.validator_core",
+        "core._protected.image_core",
     ]
 
     include_files = [
@@ -441,6 +541,13 @@ def run_cxfreeze(skip_flasher=False):
             "class_icons",
         ),  # 运行时通过 class_icons/ 相对路径访问
     ]
+    for binary_path in protected_binaries:
+        include_files.append(
+            (
+                binary_path,
+                os.path.join("lib", "core", "_protected", os.path.basename(binary_path)),
+            )
+        )
     if os.path.exists("ffmpeg.exe"):
         include_files.append(("ffmpeg.exe", "ffmpeg.exe"))
     if os.path.exists("ffprobe.exe"):
@@ -537,13 +644,26 @@ def run_cxfreeze(skip_flasher=False):
                     base=base,
                     target_name=f"{PROJECT_NAME}.exe",
                     icon=ICON_FILE if os.path.exists(ICON_FILE) else None,
-                )
+                ),
+                Executable(
+                    script=WORKER_SCRIPT,
+                    base=None,
+                    target_name=WORKER_EXE_NAME,
+                    icon=None,
+                ),
+                Executable(
+                    script=SERVICE_SCRIPT,
+                    base=None,
+                    target_name=SERVICE_EXE_NAME,
+                    icon=None,
+                ),
             ],
             script_args=["build"],
         )
         license_file = os.path.join(BUILD_DIR, "frozen_application_license.txt")
         if os.path.exists(license_file):
             os.remove(license_file)
+        audit_protection_layout(project_root, BUILD_DIR)
         return True
     except Exception as e:
         import traceback
