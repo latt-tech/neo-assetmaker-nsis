@@ -383,6 +383,24 @@ def test_worker_export_writes_icon_and_epconfig(tmp_path: Path) -> None:
     assert '"type": "completed"' in stdout
 
 
+def test_worker_emit_raises_on_cp1252_without_stdio_configuration(monkeypatch) -> None:
+    class StrictCp1252Stdout(io.TextIOBase):
+        def write(self, text: str) -> int:
+            text.encode("cp1252", "strict")
+            return len(text)
+
+    monkeypatch.setattr(
+        sys,
+        "stdout",
+        StrictCp1252Stdout(),
+    )
+
+    with pytest.raises(UnicodeEncodeError):
+        emit_worker_message(
+            {"type": "progress", "message": "\u6b63\u5728\u5bfc\u51fa \u7d20\u6750"}
+        )
+
+
 def test_worker_emit_uses_utf8_after_stdio_configuration(monkeypatch) -> None:
     stdout_buffer = io.BytesIO()
     stderr_buffer = io.BytesIO()
@@ -398,9 +416,13 @@ def test_worker_emit_uses_utf8_after_stdio_configuration(monkeypatch) -> None:
     )
 
     configure_utf8_stdio()
-    emit_worker_message({"type": "progress", "message": "正在导出 素材"})
+    emit_worker_message(
+        {"type": "progress", "message": "\u6b63\u5728\u5bfc\u51fa \u7d20\u6750"}
+    )
 
-    assert "正在导出 素材" in stdout_buffer.getvalue().decode("utf-8")
+    assert "\u6b63\u5728\u5bfc\u51fa \u7d20\u6750" in stdout_buffer.getvalue().decode(
+        "utf-8"
+    )
 
 
 def test_service_emit_uses_utf8_after_stdio_configuration(monkeypatch) -> None:
@@ -418,6 +440,13 @@ def test_service_emit_uses_utf8_after_stdio_configuration(monkeypatch) -> None:
     )
 
     configure_utf8_stdio()
-    emit_service_message("1", "progress", message="循环视频已准备", percent=85)
+    emit_service_message(
+        "1",
+        "progress",
+        message="\u5faa\u73af\u89c6\u9891\u5df2\u51c6\u5907",
+        percent=85,
+    )
 
-    assert "循环视频已准备" in stdout_buffer.getvalue().decode("utf-8")
+    assert "\u5faa\u73af\u89c6\u9891\u5df2\u51c6\u5907" in stdout_buffer.getvalue().decode(
+        "utf-8"
+    )
