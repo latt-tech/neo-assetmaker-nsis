@@ -30,6 +30,7 @@ from core._protected.export_core import (
 from core._protected.image_core import ImageProcessor
 from core._protected.validator_core import EPConfigValidator
 from core.export_models import MaterialExportRequest, VideoExportParams
+from protected_worker.stdio_utils import configure_utf8_stdio
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,7 @@ def handle_export(payload: dict[str, Any]) -> int:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     logging.basicConfig(level=logging.ERROR)
 
     request_line = sys.stdin.readline()

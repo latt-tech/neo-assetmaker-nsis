@@ -32,6 +32,7 @@ from core.export_models import (
     VideoProbeResult,
     VideoSelection,
 )
+from protected_worker.stdio_utils import configure_utf8_stdio
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +456,7 @@ def handle_request(request_id: str, command: str, payload: dict[str, Any]) -> bo
 
 
 def main() -> int:
+    configure_utf8_stdio()
     logging.basicConfig(level=logging.ERROR)
 
     while True:

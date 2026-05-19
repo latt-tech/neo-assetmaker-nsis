@@ -1,4 +1,6 @@
+import io
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +21,9 @@ from core.material_worker_client import run_worker_validation, spawn_worker_proc
 from core.export_service import ExportService, VideoExportParams
 from core.overlay_renderer import OverlayRenderer
 from core.video_processor import VideoProcessor
+from protected_worker.service_main import emit as emit_service_message
+from protected_worker.stdio_utils import configure_utf8_stdio
+from protected_worker.worker_main import emit as emit_worker_message
 
 
 def test_write_argb_rotates_and_writes_bgra(tmp_path: Path) -> None:
@@ -376,3 +381,43 @@ def test_worker_export_writes_icon_and_epconfig(tmp_path: Path) -> None:
     assert (tmp_path / "out" / "icon.png").exists()
     assert (tmp_path / "out" / "epconfig.json").exists()
     assert '"type": "completed"' in stdout
+
+
+def test_worker_emit_uses_utf8_after_stdio_configuration(monkeypatch) -> None:
+    stdout_buffer = io.BytesIO()
+    stderr_buffer = io.BytesIO()
+    monkeypatch.setattr(
+        sys,
+        "stdout",
+        io.TextIOWrapper(stdout_buffer, encoding="cp1252"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "stderr",
+        io.TextIOWrapper(stderr_buffer, encoding="cp1252"),
+    )
+
+    configure_utf8_stdio()
+    emit_worker_message({"type": "progress", "message": "正在导出 素材"})
+
+    assert "正在导出 素材" in stdout_buffer.getvalue().decode("utf-8")
+
+
+def test_service_emit_uses_utf8_after_stdio_configuration(monkeypatch) -> None:
+    stdout_buffer = io.BytesIO()
+    stderr_buffer = io.BytesIO()
+    monkeypatch.setattr(
+        sys,
+        "stdout",
+        io.TextIOWrapper(stdout_buffer, encoding="cp1252"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "stderr",
+        io.TextIOWrapper(stderr_buffer, encoding="cp1252"),
+    )
+
+    configure_utf8_stdio()
+    emit_service_message("1", "progress", message="循环视频已准备", percent=85)
+
+    assert "循环视频已准备" in stdout_buffer.getvalue().decode("utf-8")
