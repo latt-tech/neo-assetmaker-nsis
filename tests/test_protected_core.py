@@ -6,7 +6,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from build import SERVICE_EXE_NAME, WORKER_EXE_NAME, audit_protection_layout
+from build import (
+    SERVICE_EXE_NAME,
+    SERVICE_SCRIPT,
+    WORKER_EXE_NAME,
+    WORKER_SCRIPT,
+    audit_protection_layout,
+)
 from core._protected.export_core import (
     ProtectedExportRuntime,
     build_frame_pattern,
@@ -16,14 +22,21 @@ from core._protected.export_core import (
 )
 from core.export_models import LoopImageVideoRequest, MaterialExportBuildRequest, TransitionCropRequest, VideoSelection
 from core.image_processor import ImageProcessor
-from core.material_service_client import MaterialServiceClient
-from core.material_worker_client import run_worker_validation, spawn_worker_process
+from core.material_service_client import (
+    MaterialServiceClient,
+    resolve_service_command,
+)
+from core.material_worker_client import (
+    resolve_worker_command,
+    run_worker_validation,
+    spawn_worker_process,
+)
 from core.export_service import ExportService, VideoExportParams
 from core.overlay_renderer import OverlayRenderer
 from core.video_processor import VideoProcessor
-from protected_worker.service_main import emit as emit_service_message
-from protected_worker.stdio_utils import configure_utf8_stdio
-from protected_worker.worker_main import emit as emit_worker_message
+from material_service_main import emit as emit_service_message
+from material_stdio_utils import configure_utf8_stdio
+from material_worker_main import emit as emit_worker_message
 
 
 def test_write_argb_rotates_and_writes_bgra(tmp_path: Path) -> None:
@@ -184,6 +197,21 @@ def test_build_audit_requires_service_executable(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match=SERVICE_EXE_NAME):
         audit_protection_layout(str(project_root), str(build_root))
+
+
+def test_build_scripts_use_top_level_material_entrypoints() -> None:
+    assert WORKER_SCRIPT == "material_worker_main.py"
+    assert SERVICE_SCRIPT == "material_service_main.py"
+
+
+def test_worker_and_service_fallback_commands_use_script_paths() -> None:
+    worker_command = resolve_worker_command()
+    service_command = resolve_service_command()
+
+    assert worker_command[1].endswith("material_worker_main.py")
+    assert service_command[1].endswith("material_service_main.py")
+    assert "-m" not in worker_command
+    assert "-m" not in service_command
 
 
 def test_material_service_crops_transition_image(tmp_path: Path) -> None:

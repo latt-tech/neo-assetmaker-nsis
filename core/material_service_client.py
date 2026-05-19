@@ -15,6 +15,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 
 SERVICE_EXE_NAME = "material_core_service.exe"
+SERVICE_SCRIPT_NAME = "material_service_main.py"
 
 
 class MaterialServiceError(RuntimeError):
@@ -44,7 +45,8 @@ def resolve_service_command() -> list[str]:
             f"Required material service executable is missing: {SERVICE_EXE_NAME}"
         )
 
-    return [sys.executable, "-m", "protected_worker.service_main"]
+    script_path = Path(__file__).resolve().parents[1] / SERVICE_SCRIPT_NAME
+    return [sys.executable, str(script_path)]
 
 
 def spawn_material_service_process() -> subprocess.Popen[str]:

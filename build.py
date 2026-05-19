@@ -14,9 +14,9 @@ sys.setrecursionlimit(10000)
 
 PROJECT_NAME = "ArknightsPassMaker"
 MAIN_SCRIPT = "main.py"
-WORKER_SCRIPT = os.path.join("protected_worker", "worker_main.py")
+WORKER_SCRIPT = "material_worker_main.py"
 WORKER_EXE_NAME = "material_core_worker.exe"
-SERVICE_SCRIPT = os.path.join("protected_worker", "service_main.py")
+SERVICE_SCRIPT = "material_service_main.py"
 SERVICE_EXE_NAME = "material_core_service.exe"
 ICON_FILE = "resources/icons/favicon.ico"
 
@@ -526,6 +526,10 @@ def run_cxfreeze(skip_flasher=False):
         "OpenGL.WGL",
         "OpenGL.AGL",
         "OpenGL.Tk",
+        "protected_worker",
+        "protected_worker.worker_main",
+        "protected_worker.service_main",
+        "protected_worker.stdio_utils",
         "core._protected.export_core",
         "core._protected.video_core",
         "core._protected.overlay_core",

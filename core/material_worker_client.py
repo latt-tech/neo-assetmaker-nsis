@@ -10,6 +10,7 @@ from typing import Any
 
 
 WORKER_EXE_NAME = "material_core_worker.exe"
+WORKER_SCRIPT_NAME = "material_worker_main.py"
 
 
 class MaterialWorkerError(RuntimeError):
@@ -34,7 +35,8 @@ def resolve_worker_command() -> list[str]:
         if candidate.exists():
             return [str(candidate)]
 
-    return [sys.executable, "-m", "protected_worker.worker_main"]
+    script_path = Path(__file__).resolve().parents[1] / WORKER_SCRIPT_NAME
+    return [sys.executable, str(script_path)]
 
 
 def spawn_worker_process() -> subprocess.Popen[str]:
