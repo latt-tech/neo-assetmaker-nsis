@@ -1,80 +1,20 @@
-name: Build Application
+name: Build NSIS Installer
 
 on:
-  workflow_call:
-    outputs:
-      artifact_run_id:
-        description: 'Workflow run ID that uploaded the build artifact'
-        value: ${{ jobs.build.outputs.artifact_run_id }}
-    inputs:
-      skip_flasher:
-        type: boolean
-        default: false
-        description: '跳过 epass_flasher/bin 检查'
-      uv_sync_mode:
-        type: string
-        default: "locked"
-        description: 'uv sync 模式: "locked"（严格校验锁文件）或 "frozen"（跳过校验）'
-      version_override:
-        type: string
-        default: ""
-        description: '非空时在构建前同步版本号到各配置文件'
-      installer_type:
-        type: string
-        default: "inno"
-        description: '安装程序类型: "inno" (默认) 或 "nsis"'
+  push:
+    branches: [main, master, dev]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-nsis:
     runs-on: windows-latest
     timeout-minutes: 90
-    outputs:
-      artifact_run_id: ${{ steps.expose-run-id.outputs.artifact_run_id }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: true
-
-      # ========== 可选：版本同步（仅 release 时传入） ==========
-
-      - name: Sync version to build files
-        if: inputs.version_override != ''
-        shell: pwsh
-        run: |
-          $version = "${{ inputs.version_override }}"
-          Write-Host "Syncing version to $version"
-
-          # Update installer.iss
-          $installerIss = Get-Content installer.iss -Raw
-          $installerIss = $installerIss -replace '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$version`""
-          Set-Content installer.iss $installerIss -NoNewline
-          Write-Host "Updated installer.iss"
-
-          # Update installer.nsi
-          $installerNsi = Get-Content installer.nsi -Raw
-          $installerNsi = $installerNsi -replace '!define MyAppVersion "[^"]+"', "!define MyAppVersion `"$version`""
-          Set-Content installer.nsi $installerNsi -NoNewline
-          Write-Host "Updated installer.nsi"
-
-          # Update config/constants.py (运行时版本显示)
-          $constantsPy = Get-Content config/constants.py -Raw
-          $constantsPy = $constantsPy -replace 'APP_VERSION = "[^"]+"', "APP_VERSION = `"$version`""
-          Set-Content config/constants.py $constantsPy -NoNewline
-          Write-Host "Updated config/constants.py"
-
-          # Update pyproject.toml (包元数据)
-          $pyprojectToml = Get-Content pyproject.toml -Raw
-          $pyprojectToml = $pyprojectToml -replace '(?m)^version = "[^"]+"', "version = `"$version`""
-          Set-Content pyproject.toml $pyprojectToml -NoNewline
-          Write-Host "Updated pyproject.toml"
-
-          # Update simulator/Cargo.toml (Rust 模拟器版本)
-          $cargoToml = Get-Content simulator/Cargo.toml -Raw
-          $cargoToml = $cargoToml -replace '(?m)^version = "[^"]+"', "version = `"$version`""
-          Set-Content simulator/Cargo.toml $cargoToml -NoNewline
-          Write-Host "Updated simulator/Cargo.toml"
 
       # ========== Rust 模拟器编译 ==========
 
@@ -133,11 +73,7 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          if [ "${{ inputs.uv_sync_mode }}" = "frozen" ]; then
-            uv sync --frozen
-          else
-            uv sync --locked
-          fi
+          uv sync --locked
           uv run --no-sync python -c "import OpenGL, av, cv2, PyQt6, numpy; print('All packages OK')"
 
       - name: Build and test protected core
@@ -170,19 +106,54 @@ jobs:
           Copy-Item $ffprobeExe.FullName -Destination "ffprobe.exe"
           Remove-Item -Recurse -Force ffmpeg_temp, ffmpeg.zip
 
+      # ========== 7z 打包 ==========
+
+      - name: Download 7-Zip standalone (7za.exe)
+        shell: pwsh
+        run: |
+          $nsisDir = "tools/nsis"
+          New-Item -ItemType Directory -Force -Path $nsisDir
+
+          # 下载 7-Zip standalone 工具包（包含 7za.exe）
+          $7zExtraUrl = "https://www.7-zip.org/a/7z2409-extra.7z"
+          Invoke-WebRequest -Uri $7zExtraUrl -OutFile "7z-extra.7z"
+
+          # 解压 7za.exe 到 tools/nsis/
+          # 使用系统自带的 7z（GitHub Actions runner 自带）
+          7z x 7z-extra.7z -o"$nsisDir" -y 7za.exe
+          Remove-Item -Force 7z-extra.7z
+
+          if (Test-Path "$nsisDir\7za.exe") {
+            Write-Host "7za.exe ready: $nsisDir\7za.exe"
+          } else {
+            Write-Error "7za.exe not found after download"
+            exit 1
+          }
+
+      - name: Create 7z archive
+        shell: pwsh
+        env:
+          PYTHONWARNINGS: "ignore::SyntaxWarning"
+        run: |
+          $env:PATH = "tools\nsis;" + $env:PATH
+          uv run --no-sync python build.py --skip-flasher --package-7z --no-installer
+
+      # ========== NSIS 安装包 ==========
+
       - name: Install NSIS
-        if: inputs.installer_type == 'nsis'
         shell: pwsh
         run: |
           $nsisDir = "tools/nsis"
           $makensis = "$nsisDir\nsis-3.10\makensis.exe"
+
           if (-not (Test-Path $makensis)) {
-            Write-Host "Downloading NSIS..."
+            Write-Host "Downloading NSIS 3.10..."
             $url = "https://github.com/nsis/nsis/releases/download/v3.10/nsis-3.10.zip"
             Invoke-WebRequest -Uri $url -OutFile nsis.zip
             Expand-Archive -Path nsis.zip -DestinationPath $nsisDir
             Remove-Item -Force nsis.zip
           }
+
           if (Test-Path $makensis) {
             Write-Host "NSIS installed: $makensis"
           } else {
@@ -190,24 +161,38 @@ jobs:
             exit 1
           }
 
-      - name: Install Inno Setup
-        if: inputs.installer_type == 'inno'
+          # 验证插件目录
+          $pluginsDir = "$nsisDir\nsis-3.10\Plugins"
+          Write-Host "NSIS plugins dir: $pluginsDir"
+          if (Test-Path $pluginsDir) {
+            Get-ChildItem $pluginsDir -Filter "*.dll" | Select-Object Name
+          }
+
+      - name: Build NSIS installer
         shell: pwsh
         run: |
-          choco install innosetup -y
+          # 确认 7z 和 7za 存在
+          if (-not (Test-Path "tools\nsis\7za.exe")) {
+            Write-Error "7za.exe not found in tools/nsis/"
+            exit 1
+          }
+          # 确认 7z 归档存在
+          $7zFiles = Get-ChildItem "dist" -Filter "*.7z" -ErrorAction SilentlyContinue
+          if (-not $7zFiles) {
+            Write-Error "No .7z file found in dist/"
+            exit 1
+          }
+          Write-Host "7z archive: $($7zFiles.Name)"
 
-      - name: Build with cx_Freeze and NSIS
-        shell: pwsh
-        run: |
-          $buildArgs = @()
-          if ("${{ inputs.skip_flasher }}" -eq "true") { $buildArgs += "--skip-flasher" }
-          $buildArgs += "--installer-type", "${{ inputs.installer_type }}"
-          uv run --no-sync python build.py @buildArgs
-        env:
-          # qfluentwidgets 等第三方库触发的 SyntaxWarning
-          PYTHONWARNINGS: "ignore::SyntaxWarning"
+          # 编译 NSIS
+          $makensis = "tools\nsis\nsis-3.10\makensis.exe"
+          & $makensis installer.nsi
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NSIS build failed"
+            exit 1
+          }
 
-      - name: Debug exe outputs
+      - name: Debug outputs
         shell: pwsh
         run: |
           Write-Host "==== dist contents ===="
@@ -216,23 +201,12 @@ jobs:
           } else {
             Write-Host "dist directory not found"
           }
-          Write-Host "==== cx_Freeze contents ===="
-          if (Test-Path "ArknightsPassMaker") {
-            Get-ChildItem -Recurse "ArknightsPassMaker" -Filter *.exe | Select-Object FullName, Length
-          } else {
-            Write-Host "ArknightsPassMaker directory not found"
-          }
-      
-      - name: Upload build artifact
+
+      - name: Upload NSIS artifacts (7z + installer)
         uses: actions/upload-artifact@v4
         with:
-          name: ArknightsPassMaker-Build
+          name: ArknightsPassMaker-NSIS-Build
           path: |
-            dist/*.exe
+            dist/*.7z
+            dist/*_NSIS.exe
           if-no-files-found: error
-
-      - name: Expose artifact run ID
-        id: expose-run-id
-        shell: pwsh
-        run: |
-          "artifact_run_id=${{ github.run_id }}" >> $env:GITHUB_OUTPUT
