@@ -4,7 +4,6 @@
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
-!include "LogicLib.nsh"
 
 !ifndef MyAppVersion
   !define MyAppVersion "2.2"
@@ -164,26 +163,18 @@ SectionEnd
 
 ; ========== 函数 ==========
 Function .onInit
-  ; 仅支持 Windows 10+ (NT 10.0+)
-  ${IfNot} ${AtLeastWin10}
-    MessageBox MB_ICONSTOP "本程序仅支持 Windows 10 及以上版本。"
-    Abort
-  ${EndIf}
-
   ; 检查是否正在运行
   System::Call 'kernel32::CreateMutex(i 0, i 0, t "${AppMutex}") i .r1 ?e'
   Pop $2
-  ${If} $2 <> 0
+  StrCmp $2 0 +3
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
       "${MyAppNameCN} 正在运行，请先关闭程序后再安装。$\r$\n$\r$\n点击"确定"强制关闭并继续安装。" \
       /SD IDOK IDOK +2
     Abort
     ; 强制关闭
     FindWindow $0 "" "${MyAppNameCN}"
-    ${If} $0 <> 0
+    StrCmp $0 0 +2
       SendMessage $0 0x0010 0 0 /TIMEOUT=3000
-    ${EndIf}
-  ${EndIf}
 FunctionEnd
 
 Function un.onInit
