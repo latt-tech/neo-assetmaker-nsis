@@ -108,25 +108,30 @@ jobs:
 
       # ========== 7z 打包 ==========
 
-      - name: Download 7-Zip standalone (7za.exe)
+      - name: Setup 7za.exe for CI
         shell: pwsh
         run: |
           $nsisDir = "tools/nsis"
           New-Item -ItemType Directory -Force -Path $nsisDir
 
-          # 下载 7-Zip standalone 工具包（包含 7za.exe）
-          $7zExtraUrl = "https://www.7-zip.org/a/7z2409-extra.7z"
-          Invoke-WebRequest -Uri $7zExtraUrl -OutFile "7z-extra.7z"
-
-          # 解压 7za.exe 到 tools/nsis/
-          # 使用系统自带的 7z（GitHub Actions runner 自带）
-          7z x 7z-extra.7z -o"$nsisDir" -y 7za.exe
-          Remove-Item -Force 7z-extra.7z
+          # GitHub Actions windows-latest 自带 7-Zip
+          # 复制 7za.exe 到 tools/nsis/（供 NSIS 安装器嵌入 + build.py 调用）
+          $system7z = "C:\Program Files\7-Zip\7za.exe"
+          if (Test-Path $system7z) {
+            Copy-Item $system7z "$nsisDir\7za.exe" -Force
+            Write-Host "Copied 7za.exe from system 7-Zip"
+          } else {
+            # 如果系统没有 7za.exe，从 GitHub 下载 standalone 版本
+            Write-Host "System 7za.exe not found, downloading..."
+            $7zaUrl = "https://github.com/nicedoc/7z-standalone/releases/download/v24.09/7za.exe"
+            Invoke-WebRequest -Uri $7zaUrl -OutFile "$nsisDir\7za.exe" -TimeoutSec 30
+          }
 
           if (Test-Path "$nsisDir\7za.exe") {
-            Write-Host "7za.exe ready: $nsisDir\7za.exe"
+            $size = (Get-Item "$nsisDir\7za.exe").Length
+            Write-Host "7za.exe ready: $nsisDir\7za.exe ($size bytes)"
           } else {
-            Write-Error "7za.exe not found after download"
+            Write-Error "7za.exe not found"
             exit 1
           }
 
