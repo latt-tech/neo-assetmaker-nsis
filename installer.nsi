@@ -1,5 +1,5 @@
 ; ArknightsPassMaker NSIS Installer — 内嵌 7z 压缩包
-; 安装流程：解压 7za.exe → 解压 7z 归档到目标目录
+; 安装流程：解压 7z.exe + 7z.dll → 解压 7z 归档到目标目录
 ; 压缩方式：NSIS 外壳使用 LZMA/SOLID，内部数据为 7z (LZMA2)
 
 !include "MUI2.nsh"
@@ -87,14 +87,10 @@ Section "主程序" SEC_MAIN
   Delete "$PLUGINSDIR\7z.dll"
   Delete "$PLUGINSDIR\data.7z"
 
-  IntCmp $0 0 0 extract_error extract_error
-  Goto extract_ok
+  StrCmp $0 0 +3
+    MessageBox MB_ICONSTOP "解压失败（错误码: $0），请重试。"
+    Abort
 
-extract_error:
-  MessageBox MB_ICONSTOP "解压失败（错误码: $0），请重试。"
-  Abort
-
-extract_ok:
   ; 写入卸载信息
   WriteRegStr HKCU "Software\${MyAppNameCN}" "" $INSTDIR
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${MyAppName}" \
@@ -166,21 +162,27 @@ Function .onInit
   ; 检查是否正在运行
   System::Call 'kernel32::CreateMutex(i 0, i 0, t "${AppMutex}") i .r1 ?e'
   Pop $2
-  StrCmp $2 0 +3
+  StrCmp $2 0 done_check
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-      "${MyAppNameCN} 正在运行，请先关闭程序后再安装。$\r$\n$\r$\n点击"确定"强制关闭并继续安装。" \
-      /SD IDOK IDOK +2
-    Abort
+      "${MyAppNameCN} 正在运行，请先关闭程序后再安装。$\r$\n$\r$\n点击确定强制关闭并继续安装。" \
+      /SD IDOK
+    Pop $0
+    StrCmp $0 IDCANCEL abort_install
     ; 强制关闭
     FindWindow $0 "" "${MyAppNameCN}"
-    StrCmp $0 0 +2
+    StrCmp $0 0 done_check
       SendMessage $0 0x0010 0 0 /TIMEOUT=3000
+done_check:
+  Goto +2
+abort_install:
+  Abort
 FunctionEnd
 
 Function un.onInit
   MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 \
-    "您确实要完全删除 $(^Name) 及其所有组件？$\r$\n$\r$\n（用户配置目录 config/ 将被保留）" \
-    IDYES +2
+    "您确实要完全删除 $(^Name) 及其所有组件？$\r$\n$\r$\n（用户配置目录 config/ 将被保留）"
+  Pop $0
+  StrCmp $0 IDYES +2
   Abort
 FunctionEnd
 
