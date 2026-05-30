@@ -790,8 +790,8 @@ def create_7z_archive():
     sevenz_candidates = [
         r"C:\Program Files\7-Zip\7z.exe",
         r"C:\Program Files (x86)\7-Zip\7z.exe",
-        "tools/nsis/7za.exe",
         "tools/nsis/7z.exe",
+        "tools/nsis/7za.exe",
         "7z.exe",
         "7za.exe",
     ]

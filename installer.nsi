@@ -68,22 +68,24 @@ Section "主程序" SEC_MAIN
   ; 升级时先清理旧文件
   Call CleanOldFiles
 
-  ; 在临时目录解压 7za.exe 和 7z 归档
+  ; 在临时目录解压 7z.exe + 7z.dll 和 7z 归档
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
 
-  ; 嵌入 7za.exe（独立解压工具）
-  File /oname=7za.exe "tools\nsis\7za.exe"
+  ; 嵌入 7z.exe + 7z.dll（独立解压工具）
+  File /oname=7z.exe "tools\nsis\7z.exe"
+  File /oname=7z.dll "tools\nsis\7z.dll"
 
   ; 嵌入 7z 压缩包
   File /oname=data.7z "dist\${ArchiveName}"
 
   ; 解压 7z 到安装目录
   SetOutPath "$INSTDIR"
-  ExecWait '"$PLUGINSDIR\7za.exe" x "$PLUGINSDIR\data.7z" -y -o"$INSTDIR"' $0
+  ExecWait '"$PLUGINSDIR\7z.exe" x "$PLUGINSDIR\data.7z" -y -o"$INSTDIR"' $0
 
   ; 清理临时文件
-  Delete "$PLUGINSDIR\7za.exe"
+  Delete "$PLUGINSDIR\7z.exe"
+  Delete "$PLUGINSDIR\7z.dll"
   Delete "$PLUGINSDIR\data.7z"
 
   IntCmp $0 0 0 extract_error extract_error
