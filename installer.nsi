@@ -1,6 +1,6 @@
-; ArknightsPassMaker NSIS Installer — 内嵌 7z 压缩包
-; 安装流程：解压 7z.exe + 7z.dll → 解压 7z 归档到目标目录
-; 压缩方式：NSIS 外壳使用 LZMA/SOLID，内部数据为 7z (LZMA2)
+; ArknightsPassMaker NSIS Installer — embeds 7z archive
+; Installation flow: extract 7z.exe + 7z.dll → extract 7z archive to target dir
+; Compression: NSIS shell uses LZMA/SOLID, inner data is 7z (LZMA2)
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
@@ -10,7 +10,7 @@
 !endif
 
 !define MyAppName "ArknightsPassMaker"
-!define MyAppNameCN "明日方舟通行证素材工具箱"
+!define MyAppNameCN "ArknightsPassMaker"
 !define MyAppPublisher "Rafael-ban"
 !define MyAppURL "https://github.com/rhodesepass/neo-assetmaker"
 !define MyAppExeName "ArknightsPassMaker.exe"
@@ -18,17 +18,17 @@
 !define AppMutex "ArknightsPassMakerMutex"
 !define ArchiveName "${MyAppName}_v${MyAppVersion}.7z"
 
-; ========== 基本设置 ==========
-Name "${MyAppNameCN}"
+; ========== Basic Settings ==========
+Name "${MyAppName}"
 OutFile "dist\${MyAppName}_v${MyAppVersion}_Setup_NSIS.exe"
 InstallDir "$LOCALAPPDATA\${MyAppName}"
-InstallDirRegKey HKCU "Software\${MyAppNameCN}" ""
+InstallDirRegKey HKCU "Software\${MyAppName}" ""
 RequestExecutionLevel user
-BrandingText "${MyAppNameCN} v${MyAppVersion}"
+BrandingText "${MyAppName} v${MyAppVersion}"
 SetCompressor /SOLID lzma
 Unicode True
 
-; ========== 界面设置 ==========
+; ========== Interface Settings ==========
 !define MUI_ICON "${MyAppIcon}"
 !define MUI_UNICON "${MyAppIcon}"
 !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\installer\wizard.bmp"
@@ -40,7 +40,7 @@ Unicode True
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${MyAppExeName}"
 !define MUI_FINISHPAGE_SHOWREADME ""
-!define MUI_FINISHPAGE_LINK "GitHub 项目主页"
+!define MUI_FINISHPAGE_LINK "GitHub Project Page"
 !define MUI_FINISHPAGE_LINK_LOCATION "${MyAppURL}"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -55,46 +55,47 @@ Unicode True
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 
-!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "English"
 
-; ========== 安装类型 ==========
-InstType "完整安装"
+; ========== Installation Type ==========
+InstType "Full Installation"
 
-; ========== 文件安装 ==========
-Section "主程序" SEC_MAIN
+; ========== File Installation ==========
+Section "Main Program" SEC_MAIN
   SectionIn RO
 
-  ; 升级时先清理旧文件
+  ; Clean old files on upgrade
   Call CleanOldFiles
 
-  ; 在临时目录解压 7z.exe + 7z.dll 和 7z 归档
+  ; Extract 7z.exe + 7z.dll and 7z archive to temp dir
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
 
-  ; 嵌入 7z.exe + 7z.dll（独立解压工具）
+  ; Embed 7z.exe + 7z.dll (standalone extraction tool)
   File /oname=7z.exe "tools\nsis\7z.exe"
   File /oname=7z.dll "tools\nsis\7z.dll"
 
-  ; 嵌入 7z 压缩包
+  ; Embed 7z archive
   File /oname=data.7z "dist\${ArchiveName}"
 
-  ; 解压 7z 到安装目录
+  ; Extract 7z to installation directory
   SetOutPath "$INSTDIR"
   ExecWait '"$PLUGINSDIR\7z.exe" x "$PLUGINSDIR\data.7z" -y -o"$INSTDIR"' $0
 
-  ; 清理临时文件
+  ; Clean temp files
   Delete "$PLUGINSDIR\7z.exe"
   Delete "$PLUGINSDIR\7z.dll"
   Delete "$PLUGINSDIR\data.7z"
 
+  ; Check extraction result
   StrCmp $0 0 +3
-    MessageBox MB_ICONSTOP "解压失败（错误码: $0），请重试。"
+    MessageBox MB_ICONSTOP "Extraction failed (error code: $0). Please try again."
     Abort
 
-  ; 写入卸载信息
-  WriteRegStr HKCU "Software\${MyAppNameCN}" "" $INSTDIR
+  ; Write uninstall info
+  WriteRegStr HKCU "Software\${MyAppName}" "" $INSTDIR
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${MyAppName}" \
-                   "DisplayName" "${MyAppNameCN}"
+                   "DisplayName" "${MyAppName}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${MyAppName}" \
                    "UninstallString" "$INSTDIR\uninst.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${MyAppName}" \
@@ -115,25 +116,25 @@ Section "主程序" SEC_MAIN
   WriteUninstaller "$INSTDIR\uninst.exe"
 SectionEnd
 
-Section /o "桌面快捷方式" SEC_DESKTOP
-  CreateShortcut "$DESKTOP\${MyAppNameCN}.lnk" "$INSTDIR\${MyAppExeName}"
-  CreateShortcut "$SMPROGRAMS\${MyAppNameCN}\${MyAppNameCN}.lnk" "$INSTDIR\${MyAppExeName}"
+Section /o "Desktop Shortcut" SEC_DESKTOP
+  CreateShortcut "$DESKTOP\${MyAppName}.lnk" "$INSTDIR\${MyAppExeName}"
+  CreateShortcut "$SMPROGRAMS\${MyAppName}\${MyAppName}.lnk" "$INSTDIR\${MyAppExeName}"
 SectionEnd
 
 Section -Post
   WriteUninstaller "$INSTDIR\uninst.exe"
 SectionEnd
 
-; ========== 卸载 ==========
+; ========== Uninstall ==========
 Section "Uninstall"
-  ; 清理运行时文件（保留用户配置）
+  ; Clean runtime files (preserve user config)
   RMDir /r "$INSTDIR\logs"
   RMDir /r "$INSTDIR\.recovery"
   Delete "$INSTDIR\stdout.log"
   Delete "$INSTDIR\stderr.log"
   Delete "$INSTDIR\crash.log"
 
-  ; 删除安装的文件
+  ; Delete installed files
   RMDir /r "$INSTDIR\lib"
   RMDir /r "$INSTDIR\resources"
   RMDir /r "$INSTDIR\simulator"
@@ -145,31 +146,31 @@ Section "Uninstall"
   Delete "$INSTDIR\uninst.exe"
   Delete "$INSTDIR\install_manifest.txt"
 
-  ; 删除快捷方式
-  Delete "$DESKTOP\${MyAppNameCN}.lnk"
-  RMDir /r "$SMPROGRAMS\${MyAppNameCN}"
+  ; Delete shortcuts
+  Delete "$DESKTOP\${MyAppName}.lnk"
+  RMDir /r "$SMPROGRAMS\${MyAppName}"
 
-  ; 删除注册表
+  ; Delete registry
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${MyAppName}"
-  DeleteRegKey HKCU "Software\${MyAppNameCN}"
+  DeleteRegKey HKCU "Software\${MyAppName}"
 
-  ; 删除空目录
+  ; Delete empty directories
   RMDir "$INSTDIR"
 SectionEnd
 
-; ========== 函数 ==========
+; ========== Functions ==========
 Function .onInit
-  ; 检查是否正在运行
+  ; Check if already running
   System::Call 'kernel32::CreateMutex(i 0, i 0, t "${AppMutex}") i .r1 ?e'
   Pop $2
   StrCmp $2 0 done_check
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-      "${MyAppNameCN} 正在运行，请先关闭程序后再安装。$\r$\n$\r$\n点击确定强制关闭并继续安装。" \
+      "${MyAppName} is currently running. Please close it before installing.$\r$\n$\r$\nClick OK to force close and continue." \
       /SD IDOK
     Pop $0
     StrCmp $0 IDCANCEL abort_install
-    ; 强制关闭
-    FindWindow $0 "" "${MyAppNameCN}"
+    ; Force close
+    FindWindow $0 "" "${MyAppName}"
     StrCmp $0 0 done_check
       SendMessage $0 0x0010 0 0 /TIMEOUT=3000
 done_check:
@@ -180,38 +181,38 @@ FunctionEnd
 
 Function un.onInit
   MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 \
-    "您确实要完全删除 $(^Name) 及其所有组件？$\r$\n$\r$\n（用户配置目录 config/ 将被保留）"
+    "Are you sure you want to completely remove $(^Name) and all its components?"
   Pop $0
   StrCmp $0 IDYES +2
   Abort
 FunctionEnd
 
 Function CleanOldFiles
-  ; 升级时清理旧文件（白名单反向清理）
-  ; 白名单：config/ logs/ uninst.exe
-  ; 其余全部删除
+  ; Clean old files on upgrade (whitelist reverse cleanup)
+  ; Whitelist: config/ logs/ uninst.exe
+  ; Delete everything else
 
-  ; 清理 lib/
+  ; Clean lib/
   IfFileExists "$INSTDIR\lib\*.*" 0 +3
     RMDir /r "$INSTDIR\lib"
 
-  ; 清理 resources/
+  ; Clean resources/
   IfFileExists "$INSTDIR\resources\*.*" 0 +3
     RMDir /r "$INSTDIR\resources"
 
-  ; 清理 simulator/
+  ; Clean simulator/
   IfFileExists "$INSTDIR\simulator\*.*" 0 +3
     RMDir /r "$INSTDIR\simulator"
 
-  ; 清理 epass_flasher/
+  ; Clean epass_flasher/
   IfFileExists "$INSTDIR\epass_flasher\*.*" 0 +3
     RMDir /r "$INSTDIR\epass_flasher"
 
-  ; 清理 class_icons/
+  ; Clean class_icons/
   IfFileExists "$INSTDIR\class_icons\*.*" 0 +3
     RMDir /r "$INSTDIR\class_icons"
 
-  ; 清理根目录下的 exe/dll（保留 uninst.exe）
+  ; Clean root directory files (keep uninst.exe, config, logs, .recovery)
   FindFirst $0 $1 "$INSTDIR\*.*"
   loop_files:
     StrCmp $1 "" done_files
@@ -221,9 +222,8 @@ Function CleanOldFiles
     StrCmp $1 "config" next_file
     StrCmp $1 "logs" next_file
     StrCmp $1 ".recovery" next_file
-    StrCmp $1 "ArknightsPassMaker" next_file
 
-    ; 检查是否是目录
+    ; Check if directory
     IfFileExists "$INSTDIR\$1\*.*" is_dir is_file
 
   is_file:

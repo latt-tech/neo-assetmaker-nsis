@@ -808,18 +808,20 @@ def create_7z_archive():
     if sevenz:
         print(f"Using 7z: {sevenz}")
         try:
+            # 切换到构建目录内部打包，避免 7z 包中包含父目录名
             result = subprocess.run(
                 [
                     sevenz, "a",
                     "-t7z",
                     archive_path,
-                    os.path.join(BUILD_DIR, "*"),
+                    "*",
                     "-mx=9",
                     "-m0=LZMA2",
                     "-ms=on",
                 ],
                 capture_output=True,
                 text=True,
+                cwd=BUILD_DIR,
             )
             if result.returncode == 0:
                 size = os.path.getsize(archive_path) / 1024 / 1024
