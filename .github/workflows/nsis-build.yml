@@ -147,26 +147,27 @@ jobs:
       - name: Install NSIS
         shell: pwsh
         run: |
-          $nsisDir = "tools/nsis"
-          $makensis = "$nsisDir\nsis-3.10\makensis.exe"
+          # 使用 choco 安装 NSIS（比从 SourceForge 下载更稳定）
+          choco install nsis -y --no-progress
 
-          if (-not (Test-Path $makensis)) {
-            Write-Host "Downloading NSIS 3.10..."
-            $url = "https://github.com/nsis/nsis/releases/download/v3.10/nsis-3.10.zip"
-            Invoke-WebRequest -Uri $url -OutFile nsis.zip
-            Expand-Archive -Path nsis.zip -DestinationPath $nsisDir
-            Remove-Item -Force nsis.zip
-          }
-
+          $makensis = "C:\Program Files\NSIS\makensis.exe"
           if (Test-Path $makensis) {
             Write-Host "NSIS installed: $makensis"
           } else {
-            Write-Error "NSIS installation failed"
-            exit 1
+            # 尝试备用路径
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+            if (Test-Path $makensis) {
+              Write-Host "NSIS installed: $makensis"
+            } else {
+              Write-Error "NSIS not found after choco install"
+              exit 1
+            }
           }
 
           # 验证插件目录
-          $pluginsDir = "$nsisDir\nsis-3.10\Plugins"
+          $nsisDir = [System.IO.Path]::GetDirectoryName($makensis)
+          $pluginsDir = "$nsisDir\Plugins"
+          Write-Host "NSIS dir: $nsisDir"
           Write-Host "NSIS plugins dir: $pluginsDir"
           if (Test-Path $pluginsDir) {
             Get-ChildItem $pluginsDir -Filter "*.dll" | Select-Object Name
@@ -189,7 +190,10 @@ jobs:
           Write-Host "7z archive: $($7zFiles.Name)"
 
           # 编译 NSIS
-          $makensis = "tools\nsis\nsis-3.10\makensis.exe"
+          $makensis = "C:\Program Files\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
           & $makensis installer.nsi
           if ($LASTEXITCODE -ne 0) {
             Write-Error "NSIS build failed"
