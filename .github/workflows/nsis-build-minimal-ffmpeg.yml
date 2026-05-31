@@ -54,8 +54,8 @@ jobs:
         if: steps.cache-ffmpeg-minimal.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $url = "https://www.whirity404.xyz/wp-content/uploads/2026/05/ffmpegbuild_with_whirity404.7z"
-          curl.exe -L -A "Mozilla/5.0" -o ffmpeg_minimal.7z $url
+          $url = "https://raw.githubusercontent.com/latt-tech/resources/main/ffmpeg(build_with_whirity404).7z"
+          curl.exe -L -o ffmpeg_minimal.7z $url
           if (-not (Test-Path ffmpeg_minimal.7z) -or (Get-Item ffmpeg_minimal.7z).Length -lt 1000) {
             Write-Error "Download failed or file too small"
             exit 1
