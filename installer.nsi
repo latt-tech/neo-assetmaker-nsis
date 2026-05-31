@@ -1,7 +1,6 @@
-; ArknightsPassMaker NSIS Installer — embeds 7z archive
-; Installation flow: extract 7z.exe + 7z.dll → extract 7z archive to target dir
-; Compression: NSIS shell uses LZMA/SOLID, inner data is 7z (LZMA2)
+; ArknightsPassMaker NSIS Installer
 
+!pragma codepage "UTF-8"
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
@@ -51,11 +50,14 @@ Unicode True
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_WELCOME
+!insertmacro MUI_UNPAGE_COMPONENTS
+!insertmacro MUI_UNPAGE_DIRECTORY
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
 
 ; ========== Installation Type ==========
 InstType "Full Installation"
@@ -179,13 +181,13 @@ abort_install:
   Abort
 FunctionEnd
 
-Function un.onInit
-  MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 \
-    "Are you sure you want to completely remove $(^Name) and all its components?"
-  Pop $0
-  StrCmp $0 IDYES +2
-  Abort
-FunctionEnd
+;Function un.onInit
+;  MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 \
+;    "Are you sure you want to completely remove $(^Name) and all its components?"
+;  Pop $0
+;  StrCmp $0 IDYES +2
+;  Abort
+;FunctionEnd
 
 Function CleanOldFiles
   ; Clean old files on upgrade (whitelist reverse cleanup)
