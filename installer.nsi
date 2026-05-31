@@ -80,9 +80,10 @@ Section "Main Program" SEC_MAIN
   ; Embed 7z archive
   File /oname=data.7z "dist\${ArchiveName}"
 
-  ; Extract 7z to installation directory
+  ; Extract 7z to installation directory (hidden, no console window, no output)
   SetOutPath "$INSTDIR"
-  ExecWait '"$PLUGINSDIR\7z.exe" x "$PLUGINSDIR\data.7z" -y -o"$INSTDIR"' $0
+  nsExec::ExecToStack '"$PLUGINSDIR\7z.exe" x "$PLUGINSDIR\data.7z" -y -o"$INSTDIR" -bsp0'
+  Pop $0
 
   ; Clean temp files
   Delete "$PLUGINSDIR\7z.exe"
@@ -116,6 +117,7 @@ Section "Main Program" SEC_MAIN
                    "EstimatedSize" "$0"
 
   WriteUninstaller "$INSTDIR\uninst.exe"
+  SetAutoClose  false
 SectionEnd
 
 Section /o "Desktop Shortcut" SEC_DESKTOP
@@ -158,6 +160,7 @@ Section "Uninstall"
 
   ; Delete empty directories
   RMDir "$INSTDIR"
+  SetAutoClose  false
 SectionEnd
 
 ; ========== Functions ==========
