@@ -55,7 +55,11 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://www.whirity404.xyz/wp-content/uploads/2026/05/ffmpegbuild_with_whirity404.7z"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg_minimal.7z
+          curl.exe -L -A "Mozilla/5.0" -o ffmpeg_minimal.7z $url
+          if (-not (Test-Path ffmpeg_minimal.7z) -or (Get-Item ffmpeg_minimal.7z).Length -lt 1000) {
+            Write-Error "Download failed or file too small"
+            exit 1
+          }
           7z x ffmpeg_minimal.7z -offmpeg_temp
           $ffmpegExe = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
           $ffprobeExe = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
