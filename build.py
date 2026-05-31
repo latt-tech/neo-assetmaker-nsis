@@ -783,7 +783,7 @@ def create_7z_archive():
     print("=" * 50)
 
     archive_name = f"{PROJECT_NAME}_v{VERSION}.7z"
-    archive_path = os.path.join(DIST_DIR, archive_name)
+    archive_path = os.path.abspath(os.path.join(DIST_DIR, archive_name))
     os.makedirs(DIST_DIR, exist_ok=True)
 
     # 尝试使用 7z.exe 或 7za.exe
