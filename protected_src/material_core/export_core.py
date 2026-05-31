@@ -146,10 +146,22 @@ def write_icon_png(output_path: str, mat: np.ndarray) -> bool:
     return True
 
 
+def _clean_surrogate_chars(obj: Any) -> Any:
+    """Remove invalid surrogate characters from strings."""
+    if isinstance(obj, str):
+        return "".join(c for c in obj if not (0xD800 <= ord(c) <= 0xDFFF))
+    if isinstance(obj, dict):
+        return {k: _clean_surrogate_chars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean_surrogate_chars(item) for item in obj]
+    return obj
+
+
 def save_epconfig(output_path: str, config_dict: dict[str, Any]) -> None:
     """Persist normalized EPConfig content."""
+    cleaned_dict = _clean_surrogate_chars(config_dict)
     with open(output_path, "w", encoding="utf-8") as file_obj:
-        json.dump(config_dict, file_obj, ensure_ascii=False, indent=4)
+        json.dump(cleaned_dict, file_obj, ensure_ascii=False, indent=4)
 
 
 def build_frame_pattern(temp_dir: str) -> str:

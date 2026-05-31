@@ -234,8 +234,18 @@ class EPConfig:
             if directory and not os.path.exists(directory):
                 os.makedirs(directory)
 
+            def _clean_surrogate_chars(obj: Any) -> Any:
+                if isinstance(obj, str):
+                    return "".join(c for c in obj if not (0xD800 <= ord(c) <= 0xDFFF))
+                if isinstance(obj, dict):
+                    return {k: _clean_surrogate_chars(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_clean_surrogate_chars(item) for item in obj]
+                return obj
+
+            cleaned_dict = _clean_surrogate_chars(self.to_dict())
             with open(filepath, "w", encoding="utf-8") as file_obj:
-                json.dump(self.to_dict(), file_obj, ensure_ascii=False, indent=4)
+                json.dump(cleaned_dict, file_obj, ensure_ascii=False, indent=4)
         except PermissionError:
             raise RuntimeError(f"无法保存到 {filepath}，权限不足")
 
