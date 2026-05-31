@@ -164,11 +164,9 @@ jobs:
             Write-Host "dist directory not found"
           }
 
-      - name: Upload NSIS artifacts (7z + installer)
+      - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
           name: ArknightsPassMaker-NSIS-Minimal-FFmpeg
-          path: |
-            dist/*.7z
-            dist/*_NSIS.exe
+          path: dist/*_NSIS.exe
           if-no-files-found: error
