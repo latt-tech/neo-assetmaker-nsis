@@ -131,24 +131,31 @@ SectionEnd
 
 ; ========== Uninstall ==========
 Section "Uninstall"
-  ; Clean runtime files (preserve user config)
-  RMDir /r "$INSTDIR\logs"
-  RMDir /r "$INSTDIR\.recovery"
-  Delete "$INSTDIR\stdout.log"
-  Delete "$INSTDIR\stderr.log"
-  Delete "$INSTDIR\crash.log"
+  ; Clean all files in install directory (except whitelisted)
+  ; Whitelist: config/ (user settings)
+  FindFirst $0 $1 "$INSTDIR\*.*"
+  uninstall_loop:
+    StrCmp $1 "" uninstall_done
+    StrCmp $1 "." next_uninstall_file
+    StrCmp $1 ".." next_uninstall_file
+    StrCmp $1 "config" next_uninstall_file
+    StrCmp $1 "uninst.exe" next_uninstall_file
 
-  ; Delete installed files
-  RMDir /r "$INSTDIR\lib"
-  RMDir /r "$INSTDIR\resources"
-  RMDir /r "$INSTDIR\simulator"
-  RMDir /r "$INSTDIR\epass_flasher"
-  RMDir /r "$INSTDIR\class_icons"
-  Delete "$INSTDIR\${MyAppExeName}"
-  Delete "$INSTDIR\material_core_worker.exe"
-  Delete "$INSTDIR\material_core_service.exe"
-  Delete "$INSTDIR\uninst.exe"
-  Delete "$INSTDIR\install_manifest.txt"
+    ; Delete file or directory
+    IfFileExists "$INSTDIR\$1\*.*" uninstall_is_dir uninstall_is_file
+  uninstall_is_file:
+    Delete "$INSTDIR\$1"
+    Goto next_uninstall_file
+  uninstall_is_dir:
+    RMDir /r "$INSTDIR\$1"
+    Goto next_uninstall_file
+
+  next_uninstall_file:
+    FindNext $0 $1
+    Goto uninstall_loop
+
+  uninstall_done:
+    FindClose $0
 
   ; Delete shortcuts
   Delete "$DESKTOP\${MyAppName}.lnk"
@@ -158,9 +165,14 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${MyAppName}"
   DeleteRegKey HKCU "Software\${MyAppName}"
 
-  ; Delete empty directories
+  ; Delete uninstaller last
+  Delete "$INSTDIR\uninst.exe"
+
+  ; Delete install directory if empty
+
   RMDir "$INSTDIR"
-  SetAutoClose  false
+  SetAutoClose false
+  nsExec::ExecToStack '"c:\windows\system32\cmd.exe" x "/c" x "$INSTDIR\*"'
 SectionEnd
 
 ; ========== Functions ==========
