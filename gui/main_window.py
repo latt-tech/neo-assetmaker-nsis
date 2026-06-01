@@ -117,6 +117,8 @@ class MainWindow(QMainWindow):
         # 页面切换时记录正在播放的视频预览器，以便返回素材页时恢复
         self._videos_were_playing: list = []
 
+        self._loop_image_path: Optional[str] = None
+
         self._setup_ui()
         self._setup_menu()
         self._setup_shortcuts()
@@ -1240,6 +1242,12 @@ class MainWindow(QMainWindow):
         if not self._config:
             return
 
+        # 在保存前确保配置面板中的最新修改已同步
+        if hasattr(self, 'advanced_config_panel'):
+            self.advanced_config_panel.update_config_from_ui()
+        if hasattr(self, 'basic_config_panel'):
+            self.basic_config_panel.update_config_from_ui()
+
         if not self._project_path:
             self._on_save_as()
             return
@@ -1304,6 +1312,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "请先创建或打开项目")
             return
 
+        # 在验证前确保配置面板中的最新修改已同步
+        if hasattr(self, 'advanced_config_panel'):
+            self.advanced_config_panel.update_config_from_ui()
+        if hasattr(self, 'basic_config_panel'):
+            self.basic_config_panel.update_config_from_ui()
+
         from core.validator import EPConfigValidator
 
         validator = EPConfigValidator(self._base_dir)
@@ -1332,6 +1346,12 @@ class MainWindow(QMainWindow):
         if not self._config:
             QMessageBox.information(self, "提示", "请先创建或打开项目")
             return
+
+        # 在导出前确保配置面板中的最新修改已同步
+        if hasattr(self, 'advanced_config_panel'):
+            self.advanced_config_panel.update_config_from_ui()
+        if hasattr(self, 'basic_config_panel'):
+            self.basic_config_panel.update_config_from_ui()
 
         from core.validator import EPConfigValidator
         validator = EPConfigValidator(self._base_dir)
