@@ -1,4 +1,4 @@
-﻿#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
+#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
 #我就是那个大笨蛋....啊哈哈哈....
 #呜呜呜....果然还是被抛弃了嘛....啊哈哈哈....
 """
@@ -30,6 +30,7 @@ from config.constants import (
 from gui.widgets.drop_overlay import DropOverlayWidget
 from gui.styles import COLOR_TEXT_PRIMARY, COLOR_BG_ELEVATED, COLOR_BORDER, hex_with_alpha
 from config.epconfig import EPConfig, CONFIG_FILENAME
+from core.theme_manager import ThemeManager, ThemeMode
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, ToolButton, TransparentToolButton,
     TabWidget, SegmentedWidget,
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow):
 
         self._auto_save_service = AutoSaveService()
         self._crash_recovery_service = CrashRecoveryService()
+        self._theme_manager = ThemeManager(self)
         self._crash_recovery_service.initialize(
             os.path.join(self._app_dir, ".recovery"))
 
@@ -682,6 +684,13 @@ class MainWindow(QMainWindow):
         from qfluentwidgets.common.config import qconfig
         qconfig.themeChanged.connect(self._on_system_theme_changed)
 
+        self._theme_manager.theme_changed.connect(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, mode: ThemeMode):
+        """主题模式变更时刷新UI"""
+        logger.info(f"主题模式变更为: {mode.value}")
+        self._refresh_ui_for_theme_change()
+
     def _on_system_theme_changed(self):
         """系统亮/暗主题切换时，刷新窗口背景和自定义样式"""
         self._bg_color = self._dark_bg_color if isDarkTheme() else self._light_bg_color
@@ -783,8 +792,14 @@ class MainWindow(QMainWindow):
                 with open(config_file, "r", encoding="utf-8") as f:
                     settings = json.load(f)
 
-                theme_name = settings.get('theme', '默认')
-                self._apply_theme_change(theme_name)
+                theme_mode_str = settings.get('theme_mode', '跟随系统')
+                theme_mode_map = {
+                    '跟随系统': ThemeMode.SYSTEM,
+                    '浅色模式': ThemeMode.LIGHT,
+                    '深色模式': ThemeMode.DARK,
+                }
+                theme_mode = theme_mode_map.get(theme_mode_str, ThemeMode.SYSTEM)
+                self._theme_manager.set_theme_mode(theme_mode)
 
                 hw_accel = settings.get('hardware_acceleration', True)
                 if not hw_accel:
@@ -2553,7 +2568,7 @@ class MainWindow(QMainWindow):
             settings[setting_name] = value
 
             if setting_name == 'theme_image' and value:
-                settings['theme'] = '自定义图片'
+                settings['theme_mode'] = settings.get('theme_mode', '跟随系统')
 
             os.makedirs(config_dir, exist_ok=True)
             with open(config_file, "w", encoding="utf-8") as f:
@@ -2572,8 +2587,14 @@ class MainWindow(QMainWindow):
         if setting_name == 'show_status_bar':
             self.statusBar().setVisible(value)
 
-        elif setting_name == 'theme':
-            self._apply_theme_change(value)
+        elif setting_name == 'theme_mode':
+            theme_mode_map = {
+                '跟随系统': ThemeMode.SYSTEM,
+                '浅色模式': ThemeMode.LIGHT,
+                '深色模式': ThemeMode.DARK,
+            }
+            theme_mode = theme_mode_map.get(value, ThemeMode.SYSTEM)
+            self._theme_manager.set_theme_mode(theme_mode)
 
         elif setting_name == 'theme_color':
             self._apply_theme_color(value)
@@ -2584,6 +2605,8 @@ class MainWindow(QMainWindow):
         elif setting_name == 'theme_image':
             if value:
                 self._apply_theme_image(value)
+            else:
+                self._clear_theme_image()
 
         elif setting_name == 'hardware_acceleration':
             for preview in [self.video_preview, self.intro_preview,
@@ -2611,7 +2634,7 @@ class MainWindow(QMainWindow):
                 self._auto_save_service.stop()
 
     def _apply_theme_change(self, theme_name):
-        """应用主题变化"""
+        """应用主题变化（兼容旧版设置）"""
         logger.info(f"应用主题: {theme_name}")
 
         try:
@@ -2626,6 +2649,14 @@ class MainWindow(QMainWindow):
                     settings = json.load(f)
 
             if theme_name == '默认':
+                theme_mode_str = settings.get('theme_mode', '跟随系统')
+                theme_mode_map = {
+                    '跟随系统': ThemeMode.SYSTEM,
+                    '浅色模式': ThemeMode.LIGHT,
+                    '深色模式': ThemeMode.DARK,
+                }
+                theme_mode = theme_mode_map.get(theme_mode_str, ThemeMode.SYSTEM)
+                self._theme_manager.set_theme_mode(theme_mode)
                 self._bg_pixmap = None
                 self.setStyleSheet("")
                 self._apply_default_theme()
@@ -2638,6 +2669,18 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             logger.error(f"应用主题失败: {e}")
+
+    def _refresh_ui_for_theme_change(self):
+        """刷新所有 UI 组件以响应主题变更"""
+        self._bg_color = self._dark_bg_color if isDarkTheme() else self._light_bg_color
+
+        if self._bg_pixmap is not None:
+            self._apply_image_mode_styles()
+        else:
+            theme_color = themeColor().name()
+            self._apply_theme_color(theme_color)
+
+        self.update()
 
     def _apply_default_theme(self):
         """应用默认主题"""
@@ -2732,10 +2775,17 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(image_path)
         if not pixmap.isNull():
             self._bg_pixmap = pixmap
+            self._apply_image_mode_styles()
         else:
             logger.warning(f"主题图片加载失败: {image_path}")
             self._bg_pixmap = None
-        self._apply_image_mode_styles()
+            self._refresh_ui_for_theme_change()
+
+    def _clear_theme_image(self):
+        """清除主题图片并恢复到默认主题"""
+        self._bg_pixmap = None
+        self.setStyleSheet("")
+        self._refresh_ui_for_theme_change()
 
     def _apply_image_mode_styles(self):
         """应用图片模式下的子 widget 半透明样式"""

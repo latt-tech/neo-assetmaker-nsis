@@ -72,9 +72,9 @@ class SettingsPage(QWidget):
 
         self.uiGroup = SettingCardGroup("界面设置", self.scrollWidget)
 
-        self.themeCard = ComboSettingCard(
-            FluentIcon.PALETTE, "主题",
-            texts=["默认", "自定义图片"], parent=self.uiGroup)
+        self.themeModeCard = ComboSettingCard(
+            FluentIcon.PALETTE, "主题模式",
+            texts=["跟随系统", "浅色模式", "深色模式"], parent=self.uiGroup)
         self.themeColorCard = ColorPickerSettingCard(
             FluentIcon.PALETTE, "主题颜色",
             content="选择自定义主题颜色", parent=self.uiGroup)
@@ -91,7 +91,7 @@ class SettingsPage(QWidget):
             texts=["简体中文", "English"], parent=self.uiGroup)
 
         self.uiGroup.addSettingCards([
-            self.themeCard, self.themeColorCard,
+            self.themeModeCard, self.themeColorCard,
             self.themeImageCard, self.scaleCard, self.languageCard])
 
         self.personalGroup = SettingCardGroup("个性化设置", self.scrollWidget)
@@ -215,8 +215,8 @@ class SettingsPage(QWidget):
         self.updateFreqCard.currentTextChanged.connect(
             lambda v: self._emit('update_freq', v))
 
-        self.themeCard.currentTextChanged.connect(
-            lambda v: self._emit('theme', v))
+        self.themeModeCard.currentTextChanged.connect(
+            lambda v: self._emit('theme_mode', v))
         self.themeColorCard.colorChanged.connect(
             lambda v: self._emit('theme_color', v))
         self.themeImageCard.imageSelected.connect(
@@ -275,8 +275,8 @@ class SettingsPage(QWidget):
             self.updateFreqCard.setCurrentText(
                 settings.get('update_freq', '每天'))
 
-            self.themeCard.setCurrentText(
-                settings.get('theme', '默认'))
+            self.themeModeCard.setCurrentText(
+                settings.get('theme_mode', '跟随系统'))
             self.themeColorCard.setColor(
                 settings.get('theme_color', '#ff6b8b'))
             self.themeImageCard.setImagePath(
