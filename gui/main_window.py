@@ -201,8 +201,9 @@ class MainWindow(QMainWindow):
         # === 顶部标题栏 ===
         self.header_bar = QWidget()
         self.header_bar.setObjectName("header_bar")
-        _header_default_qss = "#header_bar { background-color: rgba(40, 40, 40, 0.7); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
-        setCustomStyleSheet(self.header_bar, _header_default_qss, _header_default_qss)
+        _header_light_qss = "#header_bar { background-color: rgba(60, 60, 65, 0.95); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
+        _header_dark_qss = "#header_bar { background-color: rgba(40, 40, 40, 0.95); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
+        setCustomStyleSheet(self.header_bar, _header_light_qss, _header_dark_qss)
         header_layout = QHBoxLayout(self.header_bar)
         header_layout.setContentsMargins(20, 8, 20, 8)
         header_layout.setSpacing(24)
@@ -2720,10 +2721,12 @@ class MainWindow(QMainWindow):
         r = 0 if self.isMaximized() else int(self._corner_radius)
 
         if hasattr(self, 'header_bar'):
+            # header_bar 始终使用主题色背景，白色文字（确保按钮可见）
             header_qss = f"#header_bar {{ background-color: {color_hex}; color: white; border-top-left-radius: {r}px; border-top-right-radius: {r}px; }} #header_bar > QLabel {{ font-weight: bold; font-size: 16px; }}"
             setCustomStyleSheet(self.header_bar, header_qss, header_qss)
 
         if hasattr(self, 'sidebar'):
+            # sidebar 始终使用主题色背景，与 header 保持一致
             sidebar_qss = f"#sidebar {{ background-color: {color_hex}; border-bottom-right-radius: {r}px; }}"
             setCustomStyleSheet(self.sidebar, sidebar_qss, sidebar_qss)
 
