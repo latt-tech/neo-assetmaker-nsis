@@ -55,7 +55,7 @@ import sys
 import logging
 import tempfile
 import shutil
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -3413,6 +3413,16 @@ class MainWindow(QMainWindow):
             timeout=20.0,
         )
 
+    def _clean_surrogate_chars(self, obj: Any) -> Any:
+        """Remove invalid surrogate characters from strings."""
+        if isinstance(obj, str):
+            return "".join(c for c in obj if not (0xD800 <= ord(c) <= 0xDFFF))
+        if isinstance(obj, dict):
+            return {k: self._clean_surrogate_chars(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._clean_surrogate_chars(item) for item in obj]
+        return obj
+
     def _collect_export_request(self) -> dict:
         """鏀堕泦瀵煎嚭鎵€闇€鐨勬暟鎹?"""
         loop_in_point, loop_out_point = self._loop_in_out
@@ -3447,9 +3457,12 @@ class MainWindow(QMainWindow):
                     rotation=self.intro_preview.get_rotation(),
                 )
 
+        config_dict = self._config.to_dict()
+        config_dict = self._clean_surrogate_chars(config_dict)
+
         request = MaterialExportBuildRequest(
             base_dir=self._base_dir,
-            config=self._config.to_dict(),
+            config=config_dict,
             icon_path=self._config.icon or "",
             loop_image_path=self._loop_image_path or "",
             loop_video_selection=loop_selection,
