@@ -1,4 +1,4 @@
-﻿#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
+#超 级 多 的 屎 山 ciallo~ 啊哈哈.....
 #我就是那个大笨蛋....啊哈哈哈....
 #呜呜呜....果然还是被抛弃了嘛....啊哈哈哈....
 """
@@ -30,6 +30,7 @@ from config.constants import (
 from gui.widgets.drop_overlay import DropOverlayWidget
 from gui.styles import COLOR_TEXT_PRIMARY, COLOR_BG_ELEVATED, COLOR_BORDER, hex_with_alpha
 from config.epconfig import EPConfig, CONFIG_FILENAME
+from core.theme_manager import ThemeManager, ThemeMode
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, ToolButton, TransparentToolButton,
     TabWidget, SegmentedWidget,
@@ -54,7 +55,7 @@ import sys
 import logging
 import tempfile
 import shutil
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow):
 
         self._auto_save_service = AutoSaveService()
         self._crash_recovery_service = CrashRecoveryService()
+        self._theme_manager = ThemeManager(self)
         self._crash_recovery_service.initialize(
             os.path.join(self._app_dir, ".recovery"))
 
@@ -114,6 +116,8 @@ class MainWindow(QMainWindow):
 
         # 页面切换时记录正在播放的视频预览器，以便返回素材页时恢复
         self._videos_were_playing: list = []
+
+        self._loop_image_path: Optional[str] = None
 
         self._setup_ui()
         self._setup_menu()
@@ -197,8 +201,9 @@ class MainWindow(QMainWindow):
         # === 顶部标题栏 ===
         self.header_bar = QWidget()
         self.header_bar.setObjectName("header_bar")
-        _header_default_qss = "#header_bar { background-color: rgba(40, 40, 40, 0.7); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
-        setCustomStyleSheet(self.header_bar, _header_default_qss, _header_default_qss)
+        _header_light_qss = "#header_bar { background-color: rgba(60, 60, 65, 0.95); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
+        _header_dark_qss = "#header_bar { background-color: rgba(40, 40, 40, 0.95); color: white; border-top-left-radius: 16px; border-top-right-radius: 16px; } #header_bar > QLabel { font-weight: bold; font-size: 16px; }"
+        setCustomStyleSheet(self.header_bar, _header_light_qss, _header_dark_qss)
         header_layout = QHBoxLayout(self.header_bar)
         header_layout.setContentsMargins(20, 8, 20, 8)
         header_layout.setSpacing(24)
@@ -682,6 +687,13 @@ class MainWindow(QMainWindow):
         from qfluentwidgets.common.config import qconfig
         qconfig.themeChanged.connect(self._on_system_theme_changed)
 
+        self._theme_manager.theme_changed.connect(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, mode: ThemeMode):
+        """主题模式变更时刷新UI"""
+        logger.info(f"主题模式变更为: {mode.value}")
+        self._refresh_ui_for_theme_change()
+
     def _on_system_theme_changed(self):
         """系统亮/暗主题切换时，刷新窗口背景和自定义样式"""
         self._bg_color = self._dark_bg_color if isDarkTheme() else self._light_bg_color
@@ -783,8 +795,14 @@ class MainWindow(QMainWindow):
                 with open(config_file, "r", encoding="utf-8") as f:
                     settings = json.load(f)
 
-                theme_name = settings.get('theme', '默认')
-                self._apply_theme_change(theme_name)
+                theme_mode_str = settings.get('theme_mode', '跟随系统')
+                theme_mode_map = {
+                    '跟随系统': ThemeMode.SYSTEM,
+                    '浅色模式': ThemeMode.LIGHT,
+                    '深色模式': ThemeMode.DARK,
+                }
+                theme_mode = theme_mode_map.get(theme_mode_str, ThemeMode.SYSTEM)
+                self._theme_manager.set_theme_mode(theme_mode)
 
                 hw_accel = settings.get('hardware_acceleration', True)
                 if not hw_accel:
@@ -1225,6 +1243,12 @@ class MainWindow(QMainWindow):
         if not self._config:
             return
 
+        # 在保存前确保配置面板中的最新修改已同步
+        if hasattr(self, 'advanced_config_panel'):
+            self.advanced_config_panel.update_config_from_ui()
+        if hasattr(self, 'basic_config_panel'):
+            self.basic_config_panel.update_config_from_ui()
+
         if not self._project_path:
             self._on_save_as()
             return
@@ -1289,6 +1313,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "请先创建或打开项目")
             return
 
+        # 在验证前确保配置面板中的最新修改已同步
+        if hasattr(self, 'advanced_config_panel'):
+            self.advanced_config_panel.update_config_from_ui()
+        if hasattr(self, 'basic_config_panel'):
+            self.basic_config_panel.update_config_from_ui()
+
         from core.validator import EPConfigValidator
 
         validator = EPConfigValidator(self._base_dir)
@@ -1317,6 +1347,12 @@ class MainWindow(QMainWindow):
         if not self._config:
             QMessageBox.information(self, "提示", "请先创建或打开项目")
             return
+
+        # 在导出前确保配置面板中的最新修改已同步
+        if hasattr(self, 'advanced_config_panel'):
+            self.advanced_config_panel.update_config_from_ui()
+        if hasattr(self, 'basic_config_panel'):
+            self.basic_config_panel.update_config_from_ui()
 
         from core.validator import EPConfigValidator
         validator = EPConfigValidator(self._base_dir)
@@ -2553,7 +2589,7 @@ class MainWindow(QMainWindow):
             settings[setting_name] = value
 
             if setting_name == 'theme_image' and value:
-                settings['theme'] = '自定义图片'
+                settings['theme_mode'] = settings.get('theme_mode', '跟随系统')
 
             os.makedirs(config_dir, exist_ok=True)
             with open(config_file, "w", encoding="utf-8") as f:
@@ -2572,8 +2608,14 @@ class MainWindow(QMainWindow):
         if setting_name == 'show_status_bar':
             self.statusBar().setVisible(value)
 
-        elif setting_name == 'theme':
-            self._apply_theme_change(value)
+        elif setting_name == 'theme_mode':
+            theme_mode_map = {
+                '跟随系统': ThemeMode.SYSTEM,
+                '浅色模式': ThemeMode.LIGHT,
+                '深色模式': ThemeMode.DARK,
+            }
+            theme_mode = theme_mode_map.get(value, ThemeMode.SYSTEM)
+            self._theme_manager.set_theme_mode(theme_mode)
 
         elif setting_name == 'theme_color':
             self._apply_theme_color(value)
@@ -2584,6 +2626,8 @@ class MainWindow(QMainWindow):
         elif setting_name == 'theme_image':
             if value:
                 self._apply_theme_image(value)
+            else:
+                self._clear_theme_image()
 
         elif setting_name == 'hardware_acceleration':
             for preview in [self.video_preview, self.intro_preview,
@@ -2611,7 +2655,7 @@ class MainWindow(QMainWindow):
                 self._auto_save_service.stop()
 
     def _apply_theme_change(self, theme_name):
-        """应用主题变化"""
+        """应用主题变化（兼容旧版设置）"""
         logger.info(f"应用主题: {theme_name}")
 
         try:
@@ -2626,6 +2670,14 @@ class MainWindow(QMainWindow):
                     settings = json.load(f)
 
             if theme_name == '默认':
+                theme_mode_str = settings.get('theme_mode', '跟随系统')
+                theme_mode_map = {
+                    '跟随系统': ThemeMode.SYSTEM,
+                    '浅色模式': ThemeMode.LIGHT,
+                    '深色模式': ThemeMode.DARK,
+                }
+                theme_mode = theme_mode_map.get(theme_mode_str, ThemeMode.SYSTEM)
+                self._theme_manager.set_theme_mode(theme_mode)
                 self._bg_pixmap = None
                 self.setStyleSheet("")
                 self._apply_default_theme()
@@ -2638,6 +2690,18 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             logger.error(f"应用主题失败: {e}")
+
+    def _refresh_ui_for_theme_change(self):
+        """刷新所有 UI 组件以响应主题变更"""
+        self._bg_color = self._dark_bg_color if isDarkTheme() else self._light_bg_color
+
+        if self._bg_pixmap is not None:
+            self._apply_image_mode_styles()
+        else:
+            theme_color = themeColor().name()
+            self._apply_theme_color(theme_color)
+
+        self.update()
 
     def _apply_default_theme(self):
         """应用默认主题"""
@@ -2657,10 +2721,12 @@ class MainWindow(QMainWindow):
         r = 0 if self.isMaximized() else int(self._corner_radius)
 
         if hasattr(self, 'header_bar'):
+            # header_bar 始终使用主题色背景，白色文字（确保按钮可见）
             header_qss = f"#header_bar {{ background-color: {color_hex}; color: white; border-top-left-radius: {r}px; border-top-right-radius: {r}px; }} #header_bar > QLabel {{ font-weight: bold; font-size: 16px; }}"
             setCustomStyleSheet(self.header_bar, header_qss, header_qss)
 
         if hasattr(self, 'sidebar'):
+            # sidebar 始终使用主题色背景，与 header 保持一致
             sidebar_qss = f"#sidebar {{ background-color: {color_hex}; border-bottom-right-radius: {r}px; }}"
             setCustomStyleSheet(self.sidebar, sidebar_qss, sidebar_qss)
 
@@ -2732,10 +2798,17 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(image_path)
         if not pixmap.isNull():
             self._bg_pixmap = pixmap
+            self._apply_image_mode_styles()
         else:
             logger.warning(f"主题图片加载失败: {image_path}")
             self._bg_pixmap = None
-        self._apply_image_mode_styles()
+            self._refresh_ui_for_theme_change()
+
+    def _clear_theme_image(self):
+        """清除主题图片并恢复到默认主题"""
+        self._bg_pixmap = None
+        self.setStyleSheet("")
+        self._refresh_ui_for_theme_change()
 
     def _apply_image_mode_styles(self):
         """应用图片模式下的子 widget 半透明样式"""
@@ -3340,6 +3413,16 @@ class MainWindow(QMainWindow):
             timeout=20.0,
         )
 
+    def _clean_surrogate_chars(self, obj: Any) -> Any:
+        """Remove invalid surrogate characters from strings."""
+        if isinstance(obj, str):
+            return "".join(c for c in obj if not (0xD800 <= ord(c) <= 0xDFFF))
+        if isinstance(obj, dict):
+            return {k: self._clean_surrogate_chars(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._clean_surrogate_chars(item) for item in obj]
+        return obj
+
     def _collect_export_request(self) -> dict:
         """鏀堕泦瀵煎嚭鎵€闇€鐨勬暟鎹?"""
         loop_in_point, loop_out_point = self._loop_in_out
@@ -3374,9 +3457,12 @@ class MainWindow(QMainWindow):
                     rotation=self.intro_preview.get_rotation(),
                 )
 
+        config_dict = self._config.to_dict()
+        config_dict = self._clean_surrogate_chars(config_dict)
+
         request = MaterialExportBuildRequest(
             base_dir=self._base_dir,
-            config=self._config.to_dict(),
+            config=config_dict,
             icon_path=self._config.icon or "",
             loop_image_path=self._loop_image_path or "",
             loop_video_selection=loop_selection,

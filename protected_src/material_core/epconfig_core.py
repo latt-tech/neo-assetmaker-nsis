@@ -228,13 +228,25 @@ def epconfig_to_dict(config: Any, normalize_paths: bool = False) -> dict:
     return result
 
 
+def _clean_surrogate_chars(obj: Any) -> Any:
+    """Remove invalid surrogate characters from strings."""
+    if isinstance(obj, str):
+        return "".join(c for c in obj if not (0xD800 <= ord(c) <= 0xDFFF))
+    if isinstance(obj, dict):
+        return {k: _clean_surrogate_chars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean_surrogate_chars(item) for item in obj]
+    return obj
+
+
 def epconfig_to_json(
     config: Any,
     indent: int = 4,
     normalize_paths: bool = False,
 ) -> str:
+    cleaned_dict = _clean_surrogate_chars(epconfig_to_dict(config, normalize_paths=normalize_paths))
     return json.dumps(
-        epconfig_to_dict(config, normalize_paths=normalize_paths),
+        cleaned_dict,
         ensure_ascii=False,
         indent=indent,
     )

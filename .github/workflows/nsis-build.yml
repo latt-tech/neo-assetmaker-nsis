@@ -1,0 +1,220 @@
+name: Build NSIS Installer
+
+on:
+  push:
+    branches: [main, master, dev]
+  workflow_dispatch:
+
+jobs:
+  build-nsis:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # ========== Rust 模拟器编译 ==========
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "simulator -> target"
+
+      - name: Cache FFmpeg SDK
+        id: cache-ffmpeg-sdk
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-sdk
+          key: ffmpeg-sdk-win64-7.1-gyan
+
+      - name: Download FFmpeg SDK (for Rust build)
+        if: steps.cache-ffmpeg-sdk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.7z"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg-sdk.7z
+          7z x ffmpeg-sdk.7z -offmpeg-temp
+          New-Item -ItemType Directory -Force -Path ffmpeg-sdk
+          Move-Item -Path ffmpeg-temp/ffmpeg-*/* -Destination ffmpeg-sdk/
+          Remove-Item -Recurse -Force ffmpeg-temp, ffmpeg-sdk.7z
+
+      - name: Build Rust Simulator
+        shell: pwsh
+        run: |
+          $env:FFMPEG_DIR = "${{ github.workspace }}\ffmpeg-sdk"
+          Write-Host "FFMPEG_DIR: $env:FFMPEG_DIR"
+          cd simulator
+          cargo build --release
+          if (Test-Path "target\release\arknights_pass_simulator.exe") {
+            Write-Host "Simulator built successfully"
+          } else {
+            Write-Error "Simulator build failed!"
+            exit 1
+          }
+
+      # ========== Python 应用编译 ==========
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.10"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          uv sync --locked
+          uv run --no-sync python -c "import OpenGL, av, cv2, PyQt6, numpy; print('All packages OK')"
+
+      - name: Build and test protected core
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          uv run --no-sync python scripts/build_protected.py
+          uv run --no-sync python -m pytest tests/test_protected_core.py -v
+
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ffmpeg.exe
+            ffprobe.exe
+          key: ffmpeg-win64-n7.1-gpl
+
+      - name: Download FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-7.1.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_temp
+          $ffmpegExe = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobeExe = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          Copy-Item $ffmpegExe.FullName -Destination "ffmpeg.exe"
+          Copy-Item $ffprobeExe.FullName -Destination "ffprobe.exe"
+          Remove-Item -Recurse -Force ffmpeg_temp, ffmpeg.zip
+
+      # ========== 7z 打包 ==========
+
+      - name: Install 7-Zip for CI
+        shell: pwsh
+        run: |
+          $nsisDir = "tools/nsis"
+          New-Item -ItemType Directory -Force -Path $nsisDir
+
+          # 使用 choco 安装 7-Zip（包含 7z.exe + 7z.dll）
+          choco install 7zip -y --no-progress
+
+          # 复制 7z.exe 和 7z.dll 到 tools/nsis/
+          # 7z.exe 可以用于创建和解压 .7z 文件
+          $7zPath = "C:\Program Files\7-Zip\7z.exe"
+          $7zDll = "C:\Program Files\7-Zip\7z.dll"
+
+          Copy-Item $7zPath "$nsisDir\7z.exe" -Force
+          if (Test-Path $7zDll) {
+            Copy-Item $7zDll "$nsisDir\7z.dll" -Force
+          }
+
+          $size = (Get-Item "$nsisDir\7z.exe").Length
+          Write-Host "7z.exe ready: $nsisDir\7z.exe ($size bytes)"
+          if (Test-Path "$nsisDir\7z.dll") {
+            $dllSize = (Get-Item "$nsisDir\7z.dll").Length
+            Write-Host "7z.dll ready: $nsisDir\7z.dll ($dllSize bytes)"
+          }
+
+      - name: Create 7z archive
+        shell: pwsh
+        env:
+          PYTHONWARNINGS: "ignore::SyntaxWarning"
+        run: |
+          $env:PATH = "tools\nsis;" + $env:PATH
+          uv run --no-sync python build.py --skip-flasher --package-7z --no-installer
+
+      # ========== NSIS 安装包 ==========
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          # 使用 choco 安装 NSIS（比从 SourceForge 下载更稳定）
+          choco install nsis -y --no-progress
+
+          $makensis = "C:\Program Files\NSIS\makensis.exe"
+          if (Test-Path $makensis) {
+            Write-Host "NSIS installed: $makensis"
+          } else {
+            # 尝试备用路径
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+            if (Test-Path $makensis) {
+              Write-Host "NSIS installed: $makensis"
+            } else {
+              Write-Error "NSIS not found after choco install"
+              exit 1
+            }
+          }
+
+          # 验证插件目录
+          $nsisDir = [System.IO.Path]::GetDirectoryName($makensis)
+          $pluginsDir = "$nsisDir\Plugins"
+          Write-Host "NSIS dir: $nsisDir"
+          Write-Host "NSIS plugins dir: $pluginsDir"
+          if (Test-Path $pluginsDir) {
+            Get-ChildItem $pluginsDir -Filter "*.dll" | Select-Object Name
+          }
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          # 确认 7z.exe 存在（用于 NSIS 安装器嵌入）
+          if (-not (Test-Path "tools\nsis\7z.exe")) {
+            Write-Error "7z.exe not found in tools/nsis/"
+            exit 1
+          }
+          # 确认 7z 归档存在
+          $7zFiles = Get-ChildItem "dist" -Filter "*.7z" -ErrorAction SilentlyContinue
+          if (-not $7zFiles) {
+            Write-Error "No .7z file found in dist/"
+            exit 1
+          }
+          Write-Host "7z archive: $($7zFiles.Name)"
+
+          # 编译 NSIS
+          $makensis = "C:\Program Files\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          & $makensis installer.nsi
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NSIS build failed"
+            exit 1
+          }
+
+      - name: Debug outputs
+        shell: pwsh
+        run: |
+          Write-Host "==== dist contents ===="
+          if (Test-Path "dist") {
+            Get-ChildItem -Recurse "dist" | Select-Object FullName, Length
+          } else {
+            Write-Host "dist directory not found"
+          }
+
+      - name: Upload NSIS artifacts (7z + installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArknightsPassMaker-NSIS-Build
+          path: |
+            dist/*.7z
+            dist/*_NSIS.exe
+          if-no-files-found: error

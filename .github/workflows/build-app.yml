@@ -19,6 +19,10 @@ on:
         type: string
         default: ""
         description: '非空时在构建前同步版本号到各配置文件'
+      installer_type:
+        type: string
+        default: "inno"
+        description: '安装程序类型: "inno" (默认) 或 "nsis"'
 
 jobs:
   build:
@@ -47,6 +51,12 @@ jobs:
           $installerIss = $installerIss -replace '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$version`""
           Set-Content installer.iss $installerIss -NoNewline
           Write-Host "Updated installer.iss"
+
+          # Update installer.nsi
+          $installerNsi = Get-Content installer.nsi -Raw
+          $installerNsi = $installerNsi -replace '!define MyAppVersion "[^"]+"', "!define MyAppVersion `"$version`""
+          Set-Content installer.nsi $installerNsi -NoNewline
+          Write-Host "Updated installer.nsi"
 
           # Update config/constants.py (运行时版本显示)
           $constantsPy = Get-Content config/constants.py -Raw
@@ -160,16 +170,38 @@ jobs:
           Copy-Item $ffprobeExe.FullName -Destination "ffprobe.exe"
           Remove-Item -Recurse -Force ffmpeg_temp, ffmpeg.zip
 
+      - name: Install NSIS
+        if: inputs.installer_type == 'nsis'
+        shell: pwsh
+        run: |
+          $nsisDir = "tools/nsis"
+          $makensis = "$nsisDir\nsis-3.10\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            Write-Host "Downloading NSIS..."
+            $url = "https://github.com/nsis/nsis/releases/download/v3.10/nsis-3.10.zip"
+            Invoke-WebRequest -Uri $url -OutFile nsis.zip
+            Expand-Archive -Path nsis.zip -DestinationPath $nsisDir
+            Remove-Item -Force nsis.zip
+          }
+          if (Test-Path $makensis) {
+            Write-Host "NSIS installed: $makensis"
+          } else {
+            Write-Error "NSIS installation failed"
+            exit 1
+          }
+
       - name: Install Inno Setup
+        if: inputs.installer_type == 'inno'
         shell: pwsh
         run: |
           choco install innosetup -y
 
-      - name: Build with cx_Freeze and Inno Setup
+      - name: Build with cx_Freeze and NSIS
         shell: pwsh
         run: |
           $buildArgs = @()
           if ("${{ inputs.skip_flasher }}" -eq "true") { $buildArgs += "--skip-flasher" }
+          $buildArgs += "--installer-type", "${{ inputs.installer_type }}"
           uv run --no-sync python build.py @buildArgs
         env:
           # qfluentwidgets 等第三方库触发的 SyntaxWarning

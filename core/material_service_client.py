@@ -77,6 +77,17 @@ class _PendingRequest:
     progress_callback: Callable[[int, str], None] | None = None
 
 
+def _clean_surrogate_chars(obj: Any) -> Any:
+    """Remove invalid surrogate characters from strings."""
+    if isinstance(obj, str):
+        return "".join(c for c in obj if not (0xD800 <= ord(c) <= 0xDFFF))
+    if isinstance(obj, dict):
+        return {k: _clean_surrogate_chars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean_surrogate_chars(item) for item in obj]
+    return obj
+
+
 class MaterialServiceClient:
     """Thread-safe client for the persistent material service process."""
 
@@ -126,11 +137,12 @@ class MaterialServiceClient:
         with self._pending_lock:
             self._pending[request_id] = pending
 
+        cleaned_payload = _clean_surrogate_chars(payload)
         message = json.dumps(
             {
                 "request_id": request_id,
                 "command": command,
-                "payload": payload,
+                "payload": cleaned_payload,
             },
             ensure_ascii=False,
         )

@@ -1,5 +1,5 @@
 """
-明日方舟通行证素材工具箱 - cx_Freeze + Inno Setup 打包工具
+明日方舟通行证素材工具箱 - cx_Freeze + NSIS/Inno Setup 打包工具
 """
 
 import os
@@ -40,7 +40,9 @@ VERSION = get_version()
 BUILD_DIR = PROJECT_NAME
 DIST_DIR = "dist"
 ISS_FILE = "installer.iss"
+NSIS_FILE = "installer.nsi"
 INNO_SETUP_DIR = "tools/innosetup"
+NSIS_DIR = "tools/nsis"
 PROTECTED_MODULES = (
     "export_core",
     "video_core",
@@ -55,6 +57,17 @@ def parse_args():
     parser = argparse.ArgumentParser(description=f"{PROJECT_NAME} Build Tool")
     parser.add_argument(
         "--no-installer", action="store_true", help="Skip installer packaging"
+    )
+    parser.add_argument(
+        "--installer-type",
+        choices=["nsis", "inno"],
+        default="inno",
+        help="Installer type: inno (default) or nsis",
+    )
+    parser.add_argument(
+        "--package-7z",
+        action="store_true",
+        help="Create a .7z archive of the cx_Freeze build output",
     )
     parser.add_argument("--clean", action="store_true", help="Clean build directories")
     parser.add_argument(
@@ -121,6 +134,53 @@ def find_inno_setup():
     paths = [
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe",
+    ]
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def download_nsis():
+    """下载 NSIS 便携版"""
+    makensis_path = os.path.join(NSIS_DIR, "makensis.exe")
+    if os.path.exists(makensis_path):
+        return makensis_path
+
+    print("Downloading NSIS...")
+    os.makedirs(NSIS_DIR, exist_ok=True)
+
+    url = "https://github.com/nsis/nsis/releases/download/v3.10/nsis-3.10.zip"
+    zip_path = os.path.join(NSIS_DIR, "nsis.zip")
+
+    try:
+        urllib.request.urlretrieve(url, zip_path)
+        print("Extracting NSIS...")
+        import zipfile
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(NSIS_DIR)
+        os.remove(zip_path)
+
+        # NSIS 的 makensis.exe 通常在 nsis-3.10/makensis.exe
+        extracted_makensis = os.path.join(NSIS_DIR, "nsis-3.10", "makensis.exe")
+        if os.path.exists(extracted_makensis):
+            print(f"NSIS installed: {extracted_makensis}")
+            return extracted_makensis
+    except Exception as e:
+        print(f"Failed to download NSIS: {e}")
+
+    return None
+
+
+def find_nsis():
+    """查找 NSIS"""
+    local_makensis = os.path.join(NSIS_DIR, "nsis-3.10", "makensis.exe")
+    if os.path.exists(local_makensis):
+        return local_makensis
+
+    paths = [
+        r"C:\Program Files (x86)\NSIS\makensis.exe",
+        r"C:\Program Files\NSIS\makensis.exe",
     ]
     for path in paths:
         if os.path.exists(path):
@@ -326,7 +386,7 @@ def _verify_modules(search_paths, project_root):
     return True
 
 
-def check_requirements():
+def check_requirements(installer_type="inno"):
     """检查构建环境"""
     print("Checking build environment...")
 
@@ -345,11 +405,18 @@ def check_requirements():
     print(f"  ffmpeg.exe: {'found' if os.path.exists('ffmpeg.exe') else 'not found'}")
     print(f"  ffprobe.exe: {'found' if os.path.exists('ffprobe.exe') else 'not found'}")
 
-    iscc = find_inno_setup()
-    if iscc:
-        print(f"  Inno Setup: found")
-    else:
-        print("  Inno Setup: not found (will download)")
+    if installer_type == "inno":
+        iscc = find_inno_setup()
+        if iscc:
+            print(f"  Inno Setup: found")
+        else:
+            print("  Inno Setup: not found (will download)")
+    elif installer_type == "nsis":
+        nsis = find_nsis()
+        if nsis:
+            print(f"  NSIS: found")
+        else:
+            print("  NSIS: not found (will download)")
 
     return True
 
@@ -705,12 +772,150 @@ def generate_install_manifest():
     print(f"  Generated manifest: {manifest_path} ({len(entries)} entries)")
 
 
-def create_installer():
-    """创建安装包"""
+def create_7z_archive():
+    """使用 7z 压缩构建产物
+
+    使用系统 7z/7za 或 PowerShell 压缩。
+    输出到 dist/ 目录。
+    """
     print("\n" + "=" * 50)
-    print("Creating installer...")
+    print("Creating 7z archive...")
     print("=" * 50)
 
+    archive_name = f"{PROJECT_NAME}_v{VERSION}.7z"
+    archive_path = os.path.abspath(os.path.join(DIST_DIR, archive_name))
+    os.makedirs(DIST_DIR, exist_ok=True)
+
+    # 尝试使用 7z.exe 或 7za.exe
+    sevenz_candidates = [
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+        "tools/nsis/7z.exe",
+        "tools/nsis/7za.exe",
+        "7z.exe",
+        "7za.exe",
+    ]
+    sevenz = None
+    for p in sevenz_candidates:
+        try:
+            result = subprocess.run([p, "--help"], capture_output=True)
+            if result.returncode == 0:
+                sevenz = p
+                break
+        except Exception:
+            continue
+
+    if sevenz:
+        print(f"Using 7z: {sevenz}")
+        try:
+            # 切换到构建目录内部打包，避免 7z 包中包含父目录名
+            result = subprocess.run(
+                [
+                    sevenz, "a",
+                    "-t7z",
+                    archive_path,
+                    "*",
+                    "-mx=9",
+                    "-m0=LZMA2",
+                    "-ms=on",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=BUILD_DIR,
+            )
+            if result.returncode == 0:
+                size = os.path.getsize(archive_path) / 1024 / 1024
+                print(f"\nCreated: {archive_path} ({size:.2f} MB)")
+                return archive_path
+            else:
+                print(f"7z failed: {result.stderr}")
+        except Exception as e:
+            print(f"7z error: {e}")
+    else:
+        print("7z.exe/7za.exe not found, falling back to PowerShell Compress-Archive (zip)")
+
+    # Fallback: PowerShell (只支持 zip，不支持 7z)
+    print("Using PowerShell Compress-Archive (zip format)...")
+    zip_path = os.path.join(DIST_DIR, f"{PROJECT_NAME}_v{VERSION}.zip")
+    try:
+        abs_build = os.path.abspath(BUILD_DIR)
+        abs_zip = os.path.abspath(zip_path)
+        ps_cmd = f"Compress-Archive -Path '{abs_build}\\*' -DestinationPath '{abs_zip}' -Force"
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            size = os.path.getsize(zip_path) / 1024 / 1024
+            print(f"\nCreated: {zip_path} ({size:.2f} MB)")
+            return zip_path
+        else:
+            print(f"PowerShell compress failed: {result.stderr}")
+    except Exception as e:
+        print(f"PowerShell compress error: {e}")
+
+    return None
+
+
+def create_installer(installer_type="nsis"):
+    """创建安装包
+    
+    Args:
+        installer_type: "nsis" (7z/LZMA 压缩) 或 "inno" (Inno Setup)
+    """
+    print("\n" + "=" * 50)
+    print(f"Creating installer ({installer_type.upper()})...")
+    print("=" * 50)
+
+    os.makedirs(DIST_DIR, exist_ok=True)
+
+    if installer_type == "nsis":
+        return _create_nsis_installer()
+    elif installer_type == "inno":
+        return _create_inno_installer()
+    else:
+        print(f"Error: Unknown installer type: {installer_type}")
+        return False
+
+
+def _create_nsis_installer():
+    """使用 NSIS 创建安装包 (7z/LZMA 压缩)"""
+    makensis = find_nsis()
+    if not makensis:
+        makensis = download_nsis()
+    if not makensis:
+        print("Error: NSIS not available")
+        return False
+
+    if not os.path.exists(NSIS_FILE):
+        print(f"Error: {NSIS_FILE} not found")
+        return False
+
+    try:
+        result = subprocess.run(
+            [makensis, f"/DMyAppVersion={VERSION}", NSIS_FILE],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"NSIS failed: {result.stderr}")
+            return False
+
+        print(result.stdout)
+        for f in os.listdir(DIST_DIR):
+            if f.endswith(".exe") and "NSIS" in f:
+                path = os.path.join(DIST_DIR, f)
+                size = os.path.getsize(path) / 1024 / 1024
+                print(f"\nCreated: {path} ({size:.2f} MB)")
+        return True
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
+
+
+def _create_inno_installer():
+    """使用 Inno Setup 创建安装包"""
     iscc = find_inno_setup()
     if not iscc:
         iscc = download_inno_setup()
@@ -721,8 +926,6 @@ def create_installer():
     if not os.path.exists(ISS_FILE):
         print(f"Error: {ISS_FILE} not found")
         return False
-
-    os.makedirs(DIST_DIR, exist_ok=True)
 
     try:
         result = subprocess.run(
@@ -736,7 +939,7 @@ def create_installer():
 
         print(result.stdout)
         for f in os.listdir(DIST_DIR):
-            if f.endswith(".exe"):
+            if f.endswith(".exe") and "Setup" in f:
                 path = os.path.join(DIST_DIR, f)
                 size = os.path.getsize(path) / 1024 / 1024
                 print(f"\nCreated: {path} ({size:.2f} MB)")
@@ -754,7 +957,7 @@ def main():
     print(f"  {PROJECT_NAME} Build Tool v{VERSION}")
     print("=" * 50)
 
-    if not check_requirements():
+    if not check_requirements(installer_type=args.installer_type):
         sys.exit(1)
 
     if args.clean:
@@ -770,8 +973,13 @@ def main():
     print(f"\ncx_Freeze done: {BUILD_DIR}/")
     generate_install_manifest()
 
+    # 7z 打包
+    archive_path = None
+    if args.package_7z:
+        archive_path = create_7z_archive()
+
     if not args.no_installer:
-        if create_installer():
+        if create_installer(installer_type=args.installer_type):
             print("\n" + "=" * 50)
             print("Build completed!")
             print("=" * 50)

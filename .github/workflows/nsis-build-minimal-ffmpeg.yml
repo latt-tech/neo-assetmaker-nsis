@@ -1,0 +1,172 @@
+name: Build NSIS Installer (Minimal FFmpeg)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-nsis-minimal:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # ========== Python 应用编译 ==========
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.10"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          uv sync --locked
+
+      - name: Build and test protected core
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          uv run --no-sync python scripts/build_protected.py
+          uv run --no-sync python -m pytest tests/test_protected_core.py -v
+
+      # ========== 下载最小化 FFmpeg ==========
+
+      - name: Cache FFmpeg (Minimal)
+        id: cache-ffmpeg-minimal
+        uses: actions/cache@v4
+        with:
+          path: |
+            ffmpeg.exe
+            ffprobe.exe
+          key: ffmpeg-minimal-win64
+
+      - name: Download FFmpeg (Minimal)
+        if: steps.cache-ffmpeg-minimal.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://raw.githubusercontent.com/latt-tech/resources/main/ffmpeg(build_with_whirity404).7z"
+          curl.exe -L -o ffmpeg_minimal.7z $url
+          if (-not (Test-Path ffmpeg_minimal.7z) -or (Get-Item ffmpeg_minimal.7z).Length -lt 1000) {
+            Write-Error "Download failed or file too small"
+            exit 1
+          }
+          7z x ffmpeg_minimal.7z -offmpeg_temp
+          $ffmpegExe = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobeExe = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          Copy-Item $ffmpegExe.FullName -Destination "ffmpeg.exe"
+          if ($ffprobeExe) {
+            Copy-Item $ffprobeExe.FullName -Destination "ffprobe.exe"
+          }
+          Remove-Item -Recurse -Force ffmpeg_temp, ffmpeg_minimal.7z
+
+      # ========== 7z 打包 ==========
+
+      - name: Install 7-Zip for CI
+        shell: pwsh
+        run: |
+          $nsisDir = "tools/nsis"
+          New-Item -ItemType Directory -Force -Path $nsisDir
+
+          choco install 7zip -y --no-progress
+
+          $7zPath = "C:\Program Files\7-Zip\7z.exe"
+          $7zDll = "C:\Program Files\7-Zip\7z.dll"
+
+          Copy-Item $7zPath "$nsisDir\7z.exe" -Force
+          if (Test-Path $7zDll) {
+            Copy-Item $7zDll "$nsisDir\7z.dll" -Force
+          }
+
+          $size = (Get-Item "$nsisDir\7z.exe").Length
+          Write-Host "7z.exe ready: $nsisDir\7z.exe ($size bytes)"
+          if (Test-Path "$nsisDir\7z.dll") {
+            $dllSize = (Get-Item "$nsisDir\7z.dll").Length
+            Write-Host "7z.dll ready: $nsisDir\7z.dll ($dllSize bytes)"
+          }
+
+      - name: Create 7z archive
+        shell: pwsh
+        env:
+          PYTHONWARNINGS: "ignore::SyntaxWarning"
+        run: |
+          $env:PATH = "tools\nsis;" + $env:PATH
+          uv run --no-sync python build.py --skip-flasher --package-7z --no-installer
+
+      # ========== NSIS 安装包 ==========
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+
+          $makensis = "C:\Program Files\NSIS\makensis.exe"
+          if (Test-Path $makensis) {
+            Write-Host "NSIS installed: $makensis"
+          } else {
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+            if (Test-Path $makensis) {
+              Write-Host "NSIS installed: $makensis"
+            } else {
+              Write-Error "NSIS not found after choco install"
+              exit 1
+            }
+          }
+
+          $nsisDir = [System.IO.Path]::GetDirectoryName($makensis)
+          $pluginsDir = "$nsisDir\Plugins"
+          Write-Host "NSIS dir: $nsisDir"
+          Write-Host "NSIS plugins dir: $pluginsDir"
+          if (Test-Path $pluginsDir) {
+            Get-ChildItem $pluginsDir -Filter "*.dll" | Select-Object Name
+          }
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "tools\nsis\7z.exe")) {
+            Write-Error "7z.exe not found in tools/nsis/"
+            exit 1
+          }
+          $7zFiles = Get-ChildItem "dist" -Filter "*.7z" -ErrorAction SilentlyContinue
+          if (-not $7zFiles) {
+            Write-Error "No .7z file found in dist/"
+            exit 1
+          }
+          Write-Host "7z archive: $($7zFiles.Name)"
+
+          $makensis = "C:\Program Files\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          & $makensis installer.nsi
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NSIS build failed"
+            exit 1
+          }
+
+      - name: Debug outputs
+        shell: pwsh
+        run: |
+          Write-Host "==== dist contents ===="
+          if (Test-Path "dist") {
+            Get-ChildItem -Recurse "dist" | Select-Object FullName, Length
+          } else {
+            Write-Host "dist directory not found"
+          }
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArknightsPassMaker-NSIS-Minimal-FFmpeg
+          path: dist/*_NSIS.exe
+          if-no-files-found: error
